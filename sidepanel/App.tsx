@@ -677,7 +677,7 @@ export const App: React.FC = () => {
       {/* Header with Brand & Emergency Stop */}
       <header className="panel-header">
         <div className="brand-wrapper">
-          <span className="brand-icon">🎙️</span>
+          <span className="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8"/></svg></span>
           <div>
             <div className="brand-title">Browse Voice</div>
             <span className="brand-badge">{settings.languageCode}</span>
@@ -690,14 +690,14 @@ export const App: React.FC = () => {
             onClick={handleEmergencyStop}
             title="Emergency Stop / आपातकालीन रोक (रुको)"
           >
-            ⏹ Ruko / Stop
+            <span className="stop-square" /> Ruko / Stop
           </button>
           <button
             className="btn-icon"
             onClick={() => setSettingsOpen(true)}
             title="Settings / सेटिंग्स"
           >
-            ⚙️
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.6.9l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.6-.9l-1.7.7-1.4-2.4L7.5 15a8 8 0 0 1 0-1.9L6.1 12l1.4-2.4 1.7.7a8 8 0 0 1 1.6-.9l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.6.9l1.7-.7 1.4 2.4-1.4 1.1a8 8 0 0 1-.1 1.9Z"/></svg>
           </button>
         </div>
       </header>
@@ -710,23 +710,14 @@ export const App: React.FC = () => {
             <span className={`status-dot ${status}`} />
             <span className="status-label">{statusText}</span>
           </div>
-          <span className="status-info">{activeTabTitle.slice(0, 22)}...</span>
+          <span className="status-info" title={activeTabTitle}>{activeTabTitle ? activeTabTitle.slice(0, 22) : "No active tab"}{activeTabTitle.length > 22 ? "…" : ""}</span>
         </div>
 
         {/* Restricted Page Warning Banner */}
         {activeTabUrl && isRestrictedPage(activeTabUrl) && (
-          <div style={{
-            background: "rgba(255,180,0,0.12)",
-            border: "1px solid rgba(255,180,0,0.4)",
-            borderRadius: "8px",
-            padding: "8px 12px",
-            marginBottom: "8px",
-            fontSize: "12px",
-            color: "#ffcc44",
-            lineHeight: "1.5",
-          }}>
-            ⚠️ <strong>Restricted page</strong> — Chrome blocks extensions here.<br />
-            You can still say <em>"open youtube"</em>, <em>"open leetcode"</em> etc. to navigate away.
+          <div className="restricted-banner" role="status">
+            <span className="restricted-icon" aria-hidden="true">!</span>
+            <div><strong>Restricted page</strong><span className="restricted-copy">Chrome blocks extensions here. You can still say <em>“open YouTube”</em> or <em>“open LeetCode”</em> to navigate away.</span></div>
           </div>
         )}
 
@@ -734,7 +725,7 @@ export const App: React.FC = () => {
         {pendingConfirmationAction && (
           <div className="confirmation-box">
             <div className="confirmation-header">
-              <span>⚠️</span>
+              <span className="alert-mark" aria-hidden="true">!</span>
               <span>पुष्टि आवश्यक (Confirmation Needed)</span>
             </div>
             <p className="confirmation-text">{confirmationMessage}</p>
@@ -757,13 +748,15 @@ export const App: React.FC = () => {
         )}
 
         {/* Microphone Voice Control Card */}
-        <div className="mic-section">
+        <section className="mic-section" aria-label="Voice controls">
+          <div className="voice-kicker">VOICE CONTROL</div>
           <button
             className={`mic-button ${status === "listening" ? "recording" : ""}`}
             onClick={toggleRecording}
             title="Tap to speak in Hindi/Indian Languages"
+            aria-label={status === "listening" ? "Stop listening" : "Start voice input"}
           >
-            {status === "listening" ? "🔴" : "🎙️"}
+            {status === "listening" ? <span className="recording-mark" /> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8"/></svg>}
           </button>
           <div className="mic-help">
             {status === "listening"
@@ -792,14 +785,14 @@ export const App: React.FC = () => {
               Send
             </button>
           </form>
-        </div>
+        </section>
 
         {/* Step Execution Timeline */}
         <div className="step-log-section">
-          <div className="section-title">Execution Steps ({steps.length}/15)</div>
+          <div className="steps-heading"><div><div className="section-title">ACTIVITY</div><div className="steps-title">Execution steps</div></div><span className="steps-count">{steps.length} / 15</span></div>
           {steps.length === 0 ? (
-            <div style={{ color: "var(--text-muted)", fontSize: "12px", fontStyle: "italic" }}>
-              No steps executed yet. Speak a command to begin.
+            <div className="empty-steps">
+              <span className="empty-line" />Your actions will appear here
             </div>
           ) : (
             <div className="step-list">
@@ -814,7 +807,7 @@ export const App: React.FC = () => {
                   )}
                   {step.spokenSummary && (
                     <div className="step-speech">
-                      <span>🔊</span>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Zm12-1a5 5 0 0 1 0 6m2-9a9 9 0 0 1 0 12"/></svg>
                       <span>{step.spokenSummary}</span>
                     </div>
                   )}
