@@ -44,6 +44,38 @@
   margin-left: 2px;
 }
 
+#browse-voice-snipper {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  cursor: crosshair;
+  background: rgba(5, 10, 18, .52);
+  user-select: none;
+}
+
+#browse-voice-snipper .bv-snip-selection {
+  position: absolute;
+  border: 2px solid #79b2ff;
+  border-radius: 4px;
+  background: rgba(89, 151, 237, .13);
+  box-shadow: 0 0 0 9999px rgba(5, 10, 18, .28), 0 0 0 1px rgba(255,255,255,.45), 0 8px 26px rgba(0,0,0,.3);
+}
+
+#browse-voice-snipper .bv-snip-hint {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 12px;
+  color: #eef6ff;
+  border: 1px solid rgba(160, 203, 255, .35);
+  border-radius: 999px;
+  background: rgba(14, 25, 40, .92);
+  box-shadow: 0 7px 24px rgba(0,0,0,.25);
+  font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  pointer-events: none;
+}
+
 @keyframes bvPulse {
   0% {
     transform: scale(0.95);

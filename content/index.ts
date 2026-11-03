@@ -14,6 +14,117 @@ import type { PlannerAction } from "../lib/schema";
 let indicatorElement: HTMLElement | null = null;
 let agentActive = false;
 
+interface SnipSelectionResult {
+  rect: { x: number; y: number; width: number; height: number };
+  viewportWidth: number;
+  text: string;
+  elements: string[];
+  title: string;
+  url: string;
+}
+
+function getSnipText(rect: SnipSelectionResult["rect"]): { text: string; elements: string[] } {
+  const selected: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>("body *"));
+
+  for (const el of candidates) {
+    if (el.closest("#browse-voice-snipper")) continue;
+    const box = el.getBoundingClientRect();
+    const intersects = box.width > 0 && box.height > 0 &&
+      box.right > rect.x && box.left < rect.x + rect.width &&
+      box.bottom > rect.y && box.top < rect.y + rect.height;
+    if (intersects && el.innerText?.trim()) {
+      const childHasText = Array.from(el.children).some((child) =>
+        (child as HTMLElement).innerText?.trim() === el.innerText?.trim()
+      );
+      if (!childHasText && !seen.has(el)) {
+        seen.add(el);
+        selected.push(el);
+      }
+    }
+  }
+
+  const text = selected.map((el) => el.innerText.trim().replace(/\s+/g, " ")).join("\n").slice(0, 5000);
+  const elements = selected
+    .filter((el) => /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(el.tagName) || el.getAttribute("role"))
+    .map((el) => `${el.tagName.toLowerCase()}: ${(el.getAttribute("aria-label") || el.innerText || el.getAttribute("placeholder") || "").trim().replace(/\s+/g, " ").slice(0, 160)}`)
+    .filter(Boolean)
+    .slice(0, 40);
+
+  return { text, elements };
+}
+
+function startSnipSelection(): Promise<SnipSelectionResult> {
+  return new Promise((resolve, reject) => {
+    const existing = document.getElementById("browse-voice-snipper");
+    if (existing) existing.remove();
+
+    const overlay = document.createElement("div");
+    overlay.id = "browse-voice-snipper";
+    const selection = document.createElement("div");
+    selection.className = "bv-snip-selection";
+    const hint = document.createElement("div");
+    hint.className = "bv-snip-hint";
+    hint.textContent = "Drag to select · Esc to cancel";
+    overlay.append(selection, hint);
+    document.documentElement.appendChild(overlay);
+
+    const previousOverflow = document.documentElement.style.overflow;
+    document.documentElement.style.overflow = "hidden";
+    let startX = 0;
+    let startY = 0;
+    let dragging = false;
+
+    const cleanup = () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      overlay.removeEventListener("mousedown", onMouseDown);
+      overlay.removeEventListener("mousemove", onMouseMove);
+      overlay.removeEventListener("mouseup", onMouseUp);
+      overlay.remove();
+      document.documentElement.style.overflow = previousOverflow;
+    };
+    const finish = (result: SnipSelectionResult) => { cleanup(); resolve(result); };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { cleanup(); reject(new Error("Selection cancelled.")); }
+    };
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      dragging = true;
+      startX = event.clientX;
+      startY = event.clientY;
+      selection.style.cssText = `left:${startX}px;top:${startY}px;width:0;height:0;`;
+      event.preventDefault();
+    };
+    const onMouseMove = (event: MouseEvent) => {
+      if (!dragging) return;
+      const x = Math.min(startX, event.clientX);
+      const y = Math.min(startY, event.clientY);
+      const width = Math.abs(event.clientX - startX);
+      const height = Math.abs(event.clientY - startY);
+      selection.style.cssText = `left:${x}px;top:${y}px;width:${width}px;height:${height}px;`;
+    };
+    const onMouseUp = (event: MouseEvent) => {
+      if (!dragging) return;
+      dragging = false;
+      const rect = {
+        x: Math.max(0, Math.min(startX, event.clientX)),
+        y: Math.max(0, Math.min(startY, event.clientY)),
+        width: Math.abs(event.clientX - startX),
+        height: Math.abs(event.clientY - startY),
+      };
+      if (rect.width < 8 || rect.height < 8) { cleanup(); reject(new Error("Selection was too small.")); return; }
+      const context = getSnipText(rect);
+      finish({ rect, viewportWidth: window.innerWidth, ...context, title: document.title, url: window.location.href });
+    };
+
+    document.addEventListener("keydown", onKeyDown, true);
+    overlay.addEventListener("mousedown", onMouseDown);
+    overlay.addEventListener("mousemove", onMouseMove);
+    overlay.addEventListener("mouseup", onMouseUp);
+  });
+}
+
 /**
  * Creates or updates the floating "Agent is Active" indicator on the page.
  */
@@ -75,6 +186,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case "BV_DEACTIVATE_AGENT": {
       hideActiveIndicator();
       sendResponse({ ok: true });
+      return true;
+    }
+
+    case "BV_START_SNIP_SELECTION": {
+      startSnipSelection()
+        .then((selection) => sendResponse({ ok: true, selection }))
+        .catch((err) => sendResponse({ ok: false, error: err instanceof Error ? err.message : "Selection cancelled." }));
       return true;
     }
 

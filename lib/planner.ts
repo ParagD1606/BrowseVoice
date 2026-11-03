@@ -42,6 +42,125 @@ export interface LLMConfig {
   model?: string; // e.g. gemini-3.8-flash, gpt-4o-mini, deepseek-chat
 }
 
+export interface SnipContext {
+  id: string;
+  imageDataUrl: string;
+  text: string;
+  elements: string[];
+  title: string;
+  url: string;
+}
+
+export interface SnipAnswer {
+  text: string;
+  provider: string;
+}
+
+const SNIP_ANSWER_SYSTEM_PROMPT = `You are Browse Voice, a helpful visual browser assistant. Answer the user's question using the selected browser snippets as the primary source. Each snippet includes a screenshot and may include extracted page text and element labels. Be concise, accurate, and say when the selected area does not contain enough information. Do not claim to have read anything outside the snippets. Answer in the user's language or Hinglish when appropriate.`;
+
+function buildSnipContextText(question: string, snips: SnipContext[]): string {
+  const context = snips.map((snip, index) => ({
+    snippet: index + 1,
+    pageTitle: snip.title,
+    pageUrl: snip.url,
+    extractedText: snip.text,
+    visibleElements: snip.elements,
+  }));
+  return `Question: ${question}\n\nSelected browser snippets:\n${JSON.stringify(context, null, 2)}`;
+}
+
+function dataUrlParts(dataUrl: string): { mimeType: string; data: string } {
+  const match = dataUrl.match(/^data:([^;,]+);base64,(.*)$/);
+  return { mimeType: match?.[1] || "image/png", data: match?.[2] || dataUrl };
+}
+
+/** Answers a follow-up question using the screenshots and DOM context selected by the user. */
+export async function answerAboutSnips(config: LLMConfig, question: string, snips: SnipContext[]): Promise<SnipAnswer> {
+  if (config.provider === "gemini" && config.apiKey) {
+    const model = config.model || "gemini-3.8-flash";
+    const parts: Array<Record<string, unknown>> = [{ text: buildSnipContextText(question, snips) }];
+    for (const snip of snips.slice(-4)) {
+      const image = dataUrlParts(snip.imageDataUrl);
+      parts.push({ inlineData: { mimeType: image.mimeType, data: image.data } });
+    }
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: SNIP_ANSWER_SYSTEM_PROMPT }] },
+        contents: [{ role: "user", parts }],
+        generationConfig: { temperature: 0.2 },
+      }),
+    });
+    if (!response.ok) throw new Error(`Gemini vision API returned ${response.status}: ${await response.text()}`);
+    const data = await response.json();
+    const text = data?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || "").join("").trim();
+    if (!text) throw new Error("Gemini returned an empty answer.");
+    return { text, provider: `Gemini (${model})` };
+  }
+
+  if (config.provider === "openai-compatible" && config.apiKey) {
+    const endpoint = (config.endpoint || "https://api.openai.com/v1").replace(/\/$/, "");
+    const content: Array<Record<string, unknown>> = [{ type: "text", text: buildSnipContextText(question, snips) }];
+    for (const snip of snips.slice(-4)) {
+      content.push({ type: "image_url", image_url: { url: snip.imageDataUrl, detail: "high" } });
+    }
+    const response = await fetch(`${endpoint}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
+      body: JSON.stringify({
+        model: config.model || "gpt-4o-mini",
+        messages: [
+          { role: "system", content: SNIP_ANSWER_SYSTEM_PROMPT },
+          { role: "user", content },
+        ],
+        temperature: 0.2,
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      // Some OpenAI-compatible providers (including non-vision Groq models) only
+      // accept string content. Keep the selected DOM context useful instead of
+      // surfacing a raw 400 error in the conversation.
+      if (/content must be a string|content.*string/i.test(errorText)) {
+        const textOnlyResponse = await fetch(`${endpoint}/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
+          body: JSON.stringify({
+            model: config.model || "gpt-4o-mini",
+            messages: [
+              { role: "system", content: `${SNIP_ANSWER_SYSTEM_PROMPT} The current model cannot inspect images, so answer only from the extracted text and element labels.` },
+              { role: "user", content: buildSnipContextText(question, snips) },
+            ],
+            temperature: 0.2,
+          }),
+        });
+        if (textOnlyResponse.ok) {
+          const fallbackData = await textOnlyResponse.json();
+          const fallbackText = fallbackData?.choices?.[0]?.message?.content?.trim();
+          if (fallbackText) return { text: fallbackText, provider: `Text context (${config.model || "OpenAI-compatible"})` };
+        }
+        const extracted = snips.map((snip) => snip.text).filter(Boolean).join(" ");
+        return {
+          text: extracted ? `This model cannot read the image, but I found: ${extracted.slice(0, 700)}` : "This model does not support image questions. Choose Gemini or a vision-capable model in Settings.",
+          provider: "Text context fallback",
+        };
+      }
+      throw new Error(`Vision API returned ${response.status}: ${errorText}`);
+    }
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content?.trim();
+    if (!text) throw new Error("Vision model returned an empty answer.");
+    return { text, provider: `Vision (${config.model || "gpt-4o-mini"})` };
+  }
+
+  const extracted = snips.map((snip) => snip.text).filter(Boolean).join(" ");
+  return {
+    text: extracted ? `I found this in the selected area: ${extracted.slice(0, 700)}` : "I have the selected area, but the offline planner cannot read its visual details. Add a Gemini or vision-capable model in Settings.",
+    provider: "Offline preview",
+  };
+}
+
 /**
  * System prompt instructing the Planner LLM to return strict JSON actions.
  */

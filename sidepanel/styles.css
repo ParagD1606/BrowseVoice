@@ -50,6 +50,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 .mic-section { display: flex; flex-direction: column; align-items: center; gap: 11px; padding: 18px 14px 14px; border: 1px solid var(--line); border-radius: var(--r-lg); background: radial-gradient(circle at 50% 0%,#1c314a 0,#152231 48%,#121b28 100%); box-shadow: 0 14px 35px rgba(0,0,0,.18); text-align: center; }
 .voice-kicker { align-self: flex-start; color: #7f91a8; font-size: 9px; font-weight: 750; letter-spacing: 1.3px; }
+.voice-toolbar { width: 100%; display: flex; align-items: center; justify-content: space-between; }
+.select-area-button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; color: var(--blue); border: 1px solid rgba(114,170,255,.22); border-radius: 8px; background: rgba(114,170,255,.08); font-size: 10px; font-weight: 700; }
+.select-area-button:hover { border-color: rgba(114,170,255,.45); background: rgba(114,170,255,.15); }
+.select-area-button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .mic-button { width: 62px; height: 62px; display: grid; place-items: center; border: 0; border-radius: 50%; color: #b4d4ff; background: #29425f; box-shadow: inset 0 0 0 1px rgba(171,208,255,.14), 0 8px 20px rgba(0,0,0,.24); transition: background .16s ease, transform .12s ease, box-shadow .2s ease; }
 .mic-button:hover { background: #355675; transform: translateY(-1px); }
 .mic-button svg { width: 26px; height: 26px; stroke-width: 1.8; }
@@ -69,6 +73,20 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .input-text:focus, .form-input:focus, .form-select:focus { border-color: rgba(114,170,255,.7); }
 .btn-primary, .btn-confirm-yes { min-height: 38px; padding: 8px 14px; color: #fff; border: 0; background: var(--blue-strong); font-size: 12px; font-weight: 700; }
 .btn-primary:hover, .btn-confirm-yes:hover { background: #5d9af5; }
+
+.snip-context { width: 100%; padding: 9px 10px; border: 1px solid rgba(114,170,255,.18); border-radius: var(--r-sm); background: rgba(76,140,240,.07); text-align: left; }
+.snip-context-header { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .45px; text-transform: uppercase; }
+.snip-chip-list { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 1px; }
+.snip-chip { position: relative; min-width: 58px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--inset); }
+.snip-chip img { display: block; width: 58px; height: 40px; object-fit: cover; }
+.snip-chip span { display: block; padding: 3px 4px; color: var(--muted); font-size: 9px; text-align: center; }
+.snip-chip button { position: absolute; top: 3px; right: 3px; width: 16px; height: 16px; display: grid; place-items: center; padding: 0; color: #fff; border: 0; border-radius: 50%; background: rgba(8,14,23,.78); font-size: 14px; line-height: 1; }
+.snip-chip button:hover { background: #c84e5d; }
+.chat-thread { width: 100%; display: flex; flex-direction: column; gap: 7px; max-height: 220px; overflow-y: auto; text-align: left; }
+.chat-message { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); }
+.chat-message.user { border-color: rgba(114,170,255,.16); background: rgba(76,140,240,.08); }
+.chat-role { display: block; margin-bottom: 3px; color: var(--subtle); font-size: 9px; font-weight: 750; letter-spacing: .6px; text-transform: uppercase; }
+.chat-message p { color: #dce6f2; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
 
 .confirmation-box { display: flex; flex-direction: column; gap: 10px; padding: 13px; border: 1px solid rgba(240,189,114,.28); border-radius: var(--r-md); background: rgba(181,120,43,.1); animation: bvFadeIn .22s ease-out; }
 .confirmation-header { gap: 8px; color: var(--amber); font-size: 12px; font-weight: 750; }

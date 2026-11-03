@@ -21,9 +21,11 @@ import {
 } from "../lib/gnani";
 import {
   createPlanner,
+  answerAboutSnips,
   type PlannerProvider,
   type StepLogEntry,
   type LLMConfig,
+  type SnipContext,
 } from "../lib/planner";
 import {
   inspectActionSafety,
@@ -79,6 +81,39 @@ const DEFAULT_SETTINGS: SettingsState = {
   llmModel: (import.meta.env.VITE_LLM_MODEL as string) || DEFAULT_GEMINI_MODEL,
 };
 
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+}
+
+function isSelectionCommand(text: string): boolean {
+  const value = text.toLowerCase().trim();
+  return /(?:select|snip|capture|screenshot|crop|highlight).*(?:area|this|that|section|part|region)?|(?:yeh|yah|is|this)\s+(?:select|snip|capture|screenshot)|area\s+(?:select|snip)|select\s+karo/.test(value);
+}
+
+function cropCapturedImage(dataUrl: string, rect: { x: number; y: number; width: number; height: number }, viewportWidth: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = image.width / Math.max(viewportWidth, 1);
+      const sx = Math.max(0, Math.round(rect.x * scale));
+      const sy = Math.max(0, Math.round(rect.y * scale));
+      const sw = Math.min(image.width - sx, Math.max(1, Math.round(rect.width * scale)));
+      const sh = Math.min(image.height - sy, Math.max(1, Math.round(rect.height * scale)));
+      const canvas = document.createElement("canvas");
+      canvas.width = sw;
+      canvas.height = sh;
+      const context = canvas.getContext("2d");
+      if (!context) { reject(new Error("Could not prepare the selected image.")); return; }
+      context.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    image.onerror = () => reject(new Error("Could not process the selected image."));
+    image.src = dataUrl;
+  });
+}
+
 function migrateRetiredGeminiModel(settings: SettingsState): SettingsState {
   if (settings.llmProvider === "gemini" && RETIRED_GEMINI_MODELS.has(settings.llmModel)) {
     return { ...settings, llmModel: DEFAULT_GEMINI_MODEL };
@@ -98,6 +133,8 @@ export const App: React.FC = () => {
   const [currentPrompt, setCurrentPrompt] = useState<string>("");
   const [pendingConfirmationAction, setPendingConfirmationAction] = useState<PlannerAction | null>(null);
   const [confirmationMessage, setConfirmationMessage] = useState<string>("");
+  const [snips, setSnips] = useState<SnipContext[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
 
   // Settings modal
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
@@ -309,10 +346,101 @@ export const App: React.FC = () => {
     return `https://${siteName.replace(/\s+/g, "")}.com`;
   };
 
+  const selectArea = async () => {
+    if (!activeTabId) {
+      alert("No active browser tab found.");
+      return;
+    }
+
+    setStatus("thinking");
+    setStatusText("Select an area on the page / पेज का हिस्सा चुनें...");
+
+    try {
+      let selectionResponse: { ok?: boolean; selection?: { rect: { x: number; y: number; width: number; height: number }; viewportWidth: number; text: string; elements: string[]; title: string; url: string }; error?: string };
+      try {
+        selectionResponse = await chrome.tabs.sendMessage(activeTabId, { type: "BV_START_SNIP_SELECTION" });
+      } catch {
+        await chrome.runtime.sendMessage({ type: "BV_ENSURE_TAB_CONNECTED", tabId: activeTabId });
+        selectionResponse = await chrome.tabs.sendMessage(activeTabId, { type: "BV_START_SNIP_SELECTION" });
+      }
+
+      if (!selectionResponse?.ok || !selectionResponse.selection) {
+        if (selectionResponse?.error === "Selection cancelled.") {
+          setStatus("idle");
+          setStatusText("Ready / तैयार");
+          return;
+        }
+        throw new Error(selectionResponse?.error || "Selection could not be completed.");
+      }
+
+      const capture = await chrome.runtime.sendMessage({
+        type: "BV_CAPTURE_VISIBLE_TAB",
+        windowId: (await chrome.tabs.get(activeTabId)).windowId,
+      });
+      if (!capture?.ok || !capture.dataUrl) throw new Error(capture?.error || "Could not capture the selected page.");
+
+      const croppedImage = await cropCapturedImage(capture.dataUrl, selectionResponse.selection.rect, selectionResponse.selection.viewportWidth);
+      const newSnip: SnipContext = {
+        id: `snip-${Date.now()}`,
+        imageDataUrl: croppedImage,
+        text: selectionResponse.selection.text,
+        elements: selectionResponse.selection.elements,
+        title: selectionResponse.selection.title,
+        url: selectionResponse.selection.url,
+      };
+      setSnips((previous) => [...previous, newSnip].slice(-4));
+      setStatus("idle");
+      setStatusText("Snip added / चयन जुड़ गया");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Selection failed.";
+      if (message !== "Selection cancelled." && message !== "Selection was too small.") {
+        setStatusText(message);
+        alert(message);
+      } else {
+        setStatus("idle");
+        setStatusText("Ready / तैयार");
+      }
+    }
+  };
+
+  const answerFromSnips = async (question: string) => {
+    if (snips.length === 0) return;
+    const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: "user", text: question };
+    const conversation = chatMessages.slice(-8).map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.text}`).join("\n");
+    setChatMessages((previous) => [...previous, userMessage]);
+    setStatus("thinking");
+    setStatusText("Reading selected area / चुने हुए हिस्से को पढ़ रहे हैं...");
+    try {
+      const answer = await answerAboutSnips(
+        {
+          provider: settings.llmProvider,
+          apiKey: settings.llmApiKey,
+          endpoint: settings.llmEndpoint,
+          model: settings.llmModel,
+        },
+        conversation ? `Conversation so far:\n${conversation}\nCurrent question: ${question}` : question,
+        snips,
+      );
+      setChatMessages((previous) => [...previous, { id: `assistant-${Date.now()}`, role: "assistant", text: answer.text }]);
+      setStatus("idle");
+      setStatusText("Answer ready / जवाब तैयार");
+      await speakStatus(answer.text.slice(0, 500));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not answer from the selected area.";
+      setChatMessages((previous) => [...previous, { id: `assistant-${Date.now()}`, role: "assistant", text: message }]);
+      setStatus("idle");
+      setStatusText("Could not answer / जवाब नहीं मिल सका");
+    }
+  };
+
   /**
    * Core Agent Execution Loop
    */
   const runAgentLoop = async (initialRequest: string) => {
+    if (snips.length > 0) {
+      await answerFromSnips(initialRequest);
+      return;
+    }
     if (!activeTabId) {
       alert("No active browser tab found.");
       return;
@@ -587,6 +715,10 @@ export const App: React.FC = () => {
           handleEmergencyStop();
           return;
         }
+        if (isSelectionCommand(text)) {
+          await selectArea();
+          return;
+        }
         // Check for confirmation
         if (pendingConfirmationAction && isConfirmationCommand(text)) {
           await confirmAndResumeAction();
@@ -635,7 +767,9 @@ export const App: React.FC = () => {
               // End of utterance detected
               micSessionRef.current.stop();
               gnaniWsRef.current?.disconnect();
-              if (pendingConfirmationAction && isConfirmationCommand(text)) {
+              if (isSelectionCommand(text)) {
+                selectArea();
+              } else if (pendingConfirmationAction && isConfirmationCommand(text)) {
                 confirmAndResumeAction();
               } else {
                 runAgentLoop(text);
@@ -661,6 +795,11 @@ export const App: React.FC = () => {
 
     if (isStopCommand(prompt)) {
       handleEmergencyStop();
+      return;
+    }
+
+    if (isSelectionCommand(prompt)) {
+      selectArea();
       return;
     }
 
@@ -749,7 +888,13 @@ export const App: React.FC = () => {
 
         {/* Microphone Voice Control Card */}
         <section className="mic-section" aria-label="Voice controls">
-          <div className="voice-kicker">VOICE CONTROL</div>
+          <div className="voice-toolbar">
+            <div className="voice-kicker">VOICE CONTROL</div>
+            <button className="select-area-button" type="button" onClick={selectArea}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 8h8v8H8z"/></svg>
+              Select area
+            </button>
+          </div>
           <button
             className={`mic-button ${status === "listening" ? "recording" : ""}`}
             onClick={toggleRecording}
@@ -771,6 +916,39 @@ export const App: React.FC = () => {
               {transcript || <span className="transcript-empty">Your voice will appear here...</span>}
             </div>
           </div>
+
+          {snips.length > 0 && (
+            <div className="snip-context" aria-label="Selected page areas">
+              <div className="snip-context-header">
+                <span>Selected context</span>
+                <span>{snips.length}/4</span>
+              </div>
+              <div className="snip-chip-list">
+                {snips.map((snip, index) => (
+                  <div className="snip-chip" key={snip.id}>
+                    <img src={snip.imageDataUrl} alt={`Selected area ${index + 1}`} />
+                    <span>Area {index + 1}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove selected area ${index + 1}`}
+                      onClick={() => setSnips((previous) => previous.filter((item) => item.id !== snip.id))}
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {chatMessages.length > 0 && (
+            <div className="chat-thread" aria-label="Snip conversation">
+              {chatMessages.map((message) => (
+                <div className={`chat-message ${message.role}`} key={message.id}>
+                  <span className="chat-role">{message.role === "user" ? "You" : "Browse Voice"}</span>
+                  <p>{message.text}</p>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Manual Text Fallback */}
           <form className="send-row" onSubmit={handleManualSubmit}>

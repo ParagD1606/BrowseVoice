@@ -62,5 +62,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "BV_CAPTURE_VISIBLE_TAB") {
+    const windowId = message.windowId as number | undefined;
+    chrome.tabs.captureVisibleTab(windowId, { format: "png" }).then((dataUrl) => {
+      sendResponse({ ok: true, dataUrl });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: err instanceof Error ? err.message : "Could not capture tab." });
+    });
+    return true;
+  }
+
   return false;
 });
