@@ -53,12 +53,14 @@ interface SettingsState {
 }
 
 const DEFAULT_SETTINGS: SettingsState = {
-  gnaniApiKey: "",
-  languageCode: "hi-IN",
-  llmProvider: "mock",
-  llmApiKey: "",
-  llmEndpoint: "https://api.openai.com/v1",
-  llmModel: "gpt-4o-mini",
+  gnaniApiKey: (import.meta.env.VITE_GNANI_API_KEY as string) || "",
+  languageCode: (import.meta.env.VITE_LANGUAGE_CODE as string) || "hi-IN",
+  llmProvider:
+    (import.meta.env.VITE_LLM_PROVIDER as "mock" | "openai-compatible") ||
+    (import.meta.env.VITE_LLM_API_KEY ? "openai-compatible" : "mock"),
+  llmApiKey: (import.meta.env.VITE_LLM_API_KEY as string) || "",
+  llmEndpoint: (import.meta.env.VITE_LLM_ENDPOINT as string) || "https://api.openai.com/v1",
+  llmModel: (import.meta.env.VITE_LLM_MODEL as string) || "gpt-4o-mini",
 };
 
 export const App: React.FC = () => {
@@ -89,6 +91,8 @@ export const App: React.FC = () => {
     chrome.storage.local.get("browseVoiceSettings", (result) => {
       if (result.browseVoiceSettings) {
         setSettings({ ...DEFAULT_SETTINGS, ...result.browseVoiceSettings });
+      } else {
+        chrome.storage.local.set({ browseVoiceSettings: DEFAULT_SETTINGS });
       }
     });
 

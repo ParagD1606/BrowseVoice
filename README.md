@@ -205,12 +205,44 @@ npm test
 
 ---
 
-## ⚙️ Configuration & Settings
+## ⚙️ Configuration & Environment Variables (.env)
 
-Click the **⚙️ Settings** icon in the side panel header to configure:
-* **Language (`language_code`)**: Hindi (`hi-IN`), Indic Auto-detect (`indic-auto`), English (`en-IN`), Tamil, Telugu, Kannada, Marathi, Gujarati, Bengali, Punjabi, Malayalam.
-* **Gnani AI API Key**: Your API key from the Gnani developer console.
-* **Planner Provider**: Choose between **Rule-Based Mock Planner** (for offline demo) or **OpenAI-Compatible LLM** (enter API key, endpoint, and model name).
+Browse Voice supports two flexible ways to configure your **LLM** and **Gnani AI** credentials:
+
+### Method 1: Using `.env` (Recommended for Developers)
+
+1. Copy the example environment file:
+   ```bash
+   cp .env.example .env
+   ```
+2. Open `.env` and enter your credentials:
+   ```env
+   # Gnani AI API Key
+   VITE_GNANI_API_KEY=your_gnani_api_key
+
+   # LLM Provider Configuration
+   VITE_LLM_PROVIDER=openai-compatible
+   VITE_LLM_API_KEY=your_llm_api_key
+   VITE_LLM_ENDPOINT=https://api.openai.com/v1
+   VITE_LLM_MODEL=gpt-4o-mini
+   ```
+   *(Works with OpenAI, OpenRouter, DeepSeek, Groq, or local Ollama)*.
+3. Build the extension:
+   ```bash
+   npm run build
+   ```
+
+### Method 2: In-App Settings Dialog (No Rebuilding Needed)
+
+Click the **⚙️ Settings** icon in the Side Panel header at any time to enter or update keys:
+* **Planner Provider**: Select **OpenAI-Compatible LLM** or **Rule-Based Mock Planner**.
+* **LLM API Key**: Your key (`sk-...`).
+* **LLM Base Endpoint**: `https://api.openai.com/v1`, `https://openrouter.ai/api/v1`, `https://api.deepseek.com/v1`, etc.
+* **LLM Model**: e.g., `gpt-4o-mini`, `deepseek-chat`, `llama-3.3-70b-versatile`.
+* **Gnani AI API Key**: Your API key from [https://console.gnani.ai](https://console.gnani.ai).
+* **Language (`language_code`)**: Hindi (`hi-IN`), Indic Auto-detect (`indic-auto`), English (`en-IN`), Tamil, Telugu, etc.
+
+Keys entered in the UI are securely stored in `chrome.storage.local` and override `.env` values.
 
 ---
 
