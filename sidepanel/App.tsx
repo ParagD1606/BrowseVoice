@@ -53,6 +53,13 @@ interface SettingsState {
   llmModel: string;
 }
 
+const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+const RETIRED_GEMINI_MODELS = new Set([
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
+  "gemini-1.5-pro",
+]);
+
 const DEFAULT_SETTINGS: SettingsState = {
   gnaniApiKey: (import.meta.env.VITE_GNANI_API_KEY as string) || "",
   languageCode: (import.meta.env.VITE_LANGUAGE_CODE as string) || "hi-IN",
@@ -69,8 +76,15 @@ const DEFAULT_SETTINGS: SettingsState = {
     (import.meta.env.VITE_LLM_API_KEY as string) ||
     "",
   llmEndpoint: (import.meta.env.VITE_LLM_ENDPOINT as string) || "https://api.openai.com/v1",
-  llmModel: (import.meta.env.VITE_LLM_MODEL as string) || "gemini-2.0-flash",
+  llmModel: (import.meta.env.VITE_LLM_MODEL as string) || DEFAULT_GEMINI_MODEL,
 };
+
+function migrateRetiredGeminiModel(settings: SettingsState): SettingsState {
+  if (settings.llmProvider === "gemini" && RETIRED_GEMINI_MODELS.has(settings.llmModel)) {
+    return { ...settings, llmModel: DEFAULT_GEMINI_MODEL };
+  }
+  return settings;
+}
 
 export const App: React.FC = () => {
   // Agent state
@@ -100,9 +114,17 @@ export const App: React.FC = () => {
   useEffect(() => {
     chrome.storage.local.get("browseVoiceSettings", (result) => {
       if (result.browseVoiceSettings) {
-        setSettings({ ...DEFAULT_SETTINGS, ...result.browseVoiceSettings });
+        const savedSettings = result.browseVoiceSettings as Partial<SettingsState>;
+        const mergedSettings = { ...DEFAULT_SETTINGS, ...savedSettings };
+        const migratedSettings = migrateRetiredGeminiModel(mergedSettings);
+        setSettings(migratedSettings);
+        if (migratedSettings.llmModel !== savedSettings.llmModel) {
+          chrome.storage.local.set({ browseVoiceSettings: migratedSettings });
+        }
       } else {
-        chrome.storage.local.set({ browseVoiceSettings: DEFAULT_SETTINGS });
+        const initialSettings = migrateRetiredGeminiModel(DEFAULT_SETTINGS);
+        setSettings(initialSettings);
+        chrome.storage.local.set({ browseVoiceSettings: initialSettings });
       }
     });
 
@@ -897,9 +919,7 @@ export const App: React.FC = () => {
                     value={settings.llmModel}
                     onChange={(e) => setSettings({ ...settings, llmModel: e.target.value })}
                   >
-                    <option value="gemini-2.0-flash">gemini-2.0-flash (Recommended)</option>
-                    <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                    <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                    <option value="gemini-3.8-flash">gemini-3.8-flash (Recommended)</option>
                   </select>
                 </div>
               </>

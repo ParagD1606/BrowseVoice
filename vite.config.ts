@@ -38,12 +38,10 @@ export default defineConfig({
       input: {
         sidepanel: resolve(import.meta.dirname, "sidepanel/index.html"),
         background: resolve(import.meta.dirname, "background/service-worker.ts"),
-        content: resolve(import.meta.dirname, "content/index.ts"),
       },
       output: {
         entryFileNames: (chunk) => {
           if (chunk.name === "background") return "background/service-worker.js";
-          if (chunk.name === "content") return "content/index.js";
           return "assets/[name]-[hash].js";
         },
       },

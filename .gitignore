@@ -1,7 +1,10 @@
 node_modules/
+.agents/
 dist/
 .DS_Store
 *.log
+*.md
+!README.md
 .env
 .env.local
 .env.*.local

@@ -39,7 +39,7 @@ export interface LLMConfig {
   provider: "openai-compatible" | "gemini" | "mock";
   endpoint?: string; // e.g. https://api.openai.com/v1 or https://openrouter.ai/api/v1
   apiKey?: string;
-  model?: string; // e.g. gemini-2.0-flash, gpt-4o-mini, deepseek-chat
+  model?: string; // e.g. gemini-3.8-flash, gpt-4o-mini, deepseek-chat
 }
 
 /**
@@ -86,7 +86,7 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
       throw new Error("LLM API Key is missing. Please set it in Browse Voice Settings.");
     }
 
-    const promptText = this.buildUserPrompt(request);
+    const promptText = buildPlannerPrompt(request);
 
     const messages = [
       { role: "system", content: PLANNER_SYSTEM_PROMPT },
@@ -211,7 +211,7 @@ export class GeminiPlanner implements PlannerProvider {
 
   constructor(config: LLMConfig) {
     this.apiKey = config.apiKey || "";
-    this.model = config.model || "gemini-2.0-flash";
+    this.model = config.model || "gemini-3.8-flash";
     this.name = `Google Gemini (${this.model})`;
   }
 
@@ -234,7 +234,6 @@ export class GeminiPlanner implements PlannerProvider {
         },
       ],
       generationConfig: {
-        temperature: 0.1,
         responseMimeType: "application/json",
       },
     };
@@ -277,7 +276,7 @@ export class GeminiPlanner implements PlannerProvider {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: PLANNER_SYSTEM_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: correctionText }] }],
-        generationConfig: { temperature: 0.0, responseMimeType: "application/json" },
+        generationConfig: { responseMimeType: "application/json" },
       }),
     });
 
