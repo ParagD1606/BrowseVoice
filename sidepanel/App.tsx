@@ -79,6 +79,7 @@ export const App: React.FC = () => {
   const [transcript, setTranscript] = useState<string>("");
   const [activeTabTitle, setActiveTabTitle] = useState<string>("");
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  const [activeTabUrl, setActiveTabUrl] = useState<string>("");
   const [steps, setSteps] = useState<StepLogEntry[]>([]);
   const [currentPrompt, setCurrentPrompt] = useState<string>("");
   const [pendingConfirmationAction, setPendingConfirmationAction] = useState<PlannerAction | null>(null);
@@ -111,6 +112,7 @@ export const App: React.FC = () => {
       if (tab?.id) {
         setActiveTabId(tab.id);
         setActiveTabTitle(tab.title || "Web Page");
+        setActiveTabUrl(tab.url || "");
       }
     });
 
@@ -119,12 +121,24 @@ export const App: React.FC = () => {
       setActiveTabId(activeInfo.tabId);
       chrome.tabs.get(activeInfo.tabId, (t) => {
         if (t?.title) setActiveTabTitle(t.title);
+        if (t?.url !== undefined) setActiveTabUrl(t.url || "");
       });
     };
 
+    // Also update URL when tab updates (e.g. navigation within same tab)
+    const onTabUpdated = (tabId: number, _info: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
+      if (tab.active) {
+        setActiveTabId(tabId);
+        setActiveTabTitle(tab.title || "Web Page");
+        setActiveTabUrl(tab.url || "");
+      }
+    };
+
     chrome.tabs.onActivated.addListener(onTabActivated);
+    chrome.tabs.onUpdated.addListener(onTabUpdated);
     return () => {
       chrome.tabs.onActivated.removeListener(onTabActivated);
+      chrome.tabs.onUpdated.removeListener(onTabUpdated);
     };
   }, []);
 
@@ -187,6 +201,93 @@ export const App: React.FC = () => {
   };
 
   /**
+   * Checks whether the current tab URL is a restricted Chrome-internal page
+   * where content scripts cannot be injected.
+   */
+  const isRestrictedPage = (url: string | undefined): boolean => {
+    if (!url) return true;
+    return (
+      url.startsWith("chrome://") ||
+      url.startsWith("chrome-extension://") ||
+      url.startsWith("about:") ||
+      url.startsWith("edge://") ||
+      url === "chrome://newtab/" ||
+      url === "about:blank"
+    );
+  };
+
+  /**
+   * Tries to resolve a plain "open X" / "navigate to X" intent directly
+   * without needing Gemini, for use when on a restricted page.
+   * Returns a URL string or null.
+   */
+  const resolveDirectNavigationIntent = (request: string): string | null => {
+    const r = request.toLowerCase().trim();
+
+    // Patterns: "open X", "go to X", "navigate to X", "X kholna", "X kholo"
+    const patterns = [
+      /^(?:open|go\s+to|navigate\s+to|take\s+me\s+to|visit)\s+(.+)$/i,
+      /^(.+?)\s+(?:kholo|kholna|khollo|open\s+karo|open\s+kar)$/i,
+    ];
+
+    let siteName: string | null = null;
+    for (const pat of patterns) {
+      const m = r.match(pat);
+      if (m) { siteName = m[1].trim(); break; }
+    }
+
+    if (!siteName) return null;
+
+    // If it already looks like a URL, use it directly
+    if (/^https?:\/\//i.test(siteName)) return siteName;
+    if (/\.[a-z]{2,}(\/|$)/i.test(siteName)) return `https://${siteName}`;
+
+    // Common site name → URL mapping
+    const siteMap: Record<string, string> = {
+      leetcode: "https://leetcode.com",
+      youtube: "https://youtube.com",
+      google: "https://google.com",
+      gmail: "https://mail.google.com",
+      github: "https://github.com",
+      stackoverflow: "https://stackoverflow.com",
+      "stack overflow": "https://stackoverflow.com",
+      twitter: "https://twitter.com",
+      x: "https://x.com",
+      facebook: "https://facebook.com",
+      instagram: "https://instagram.com",
+      linkedin: "https://linkedin.com",
+      amazon: "https://amazon.in",
+      flipkart: "https://flipkart.com",
+      netflix: "https://netflix.com",
+      spotify: "https://spotify.com",
+      reddit: "https://reddit.com",
+      whatsapp: "https://web.whatsapp.com",
+      maps: "https://maps.google.com",
+      "google maps": "https://maps.google.com",
+      drive: "https://drive.google.com",
+      "google drive": "https://drive.google.com",
+      docs: "https://docs.google.com",
+      sheets: "https://sheets.google.com",
+      irctc: "https://irctc.co.in",
+      paytm: "https://paytm.com",
+      swiggy: "https://swiggy.com",
+      zomato: "https://zomato.com",
+      chatgpt: "https://chatgpt.com",
+      "chat gpt": "https://chatgpt.com",
+      gemini: "https://gemini.google.com",
+      notion: "https://notion.so",
+      figma: "https://figma.com",
+      canva: "https://canva.com",
+    };
+
+    const normalized = siteName.toLowerCase().replace(/\s+/g, " ");
+    if (siteMap[normalized]) return siteMap[normalized];
+
+    // Fallback: treat as domain
+    return `https://${siteName.replace(/\s+/g, "")}.com`;
+  };
+
+  /**
    * Core Agent Execution Loop
    */
   const runAgentLoop = async (initialRequest: string) => {
@@ -199,6 +300,41 @@ export const App: React.FC = () => {
     setSteps([]);
     setStatus("thinking");
     setStatusText("Analyzing page / पेज की जाँच हो रही है...");
+
+    // --- Check if we're on a restricted page (chrome://, new tab, etc.) ---
+    const tabInfo = await chrome.tabs.get(activeTabId);
+    if (isRestrictedPage(tabInfo.url)) {
+      // Try to resolve navigation intent directly (no LLM needed)
+      const directUrl = resolveDirectNavigationIntent(initialRequest);
+      if (directUrl) {
+        setStatus("executing");
+        setStatusText(`Opening ${directUrl}...`);
+        const navAction: PlannerAction = {
+          action: "navigate",
+          url: directUrl,
+          rationale: `${directUrl} खोला जा रहा है।`,
+        };
+        setSteps([{
+          stepNumber: 1,
+          action: navAction,
+          status: "success",
+          spokenSummary: navAction.rationale,
+          timestamp: Date.now(),
+        }]);
+        await chrome.tabs.update(activeTabId, { url: directUrl });
+        setStatus("idle");
+        setStatusText("Navigated / पेज खुल रहा है");
+        return;
+      }
+      // Can't do anything else on restricted pages
+      setStatus("idle");
+      setStatusText("⚠️ Please go to a normal webpage first");
+      alert(
+        "Browse Voice cannot control Chrome's built-in pages (new tab, chrome://settings, etc.).\n\n" +
+        "Please navigate to any website (e.g. google.com) and then give your command."
+      );
+      return;
+    }
 
     // 1. Activate on-page visual indicator
     try {
@@ -554,6 +690,23 @@ export const App: React.FC = () => {
           </div>
           <span className="status-info">{activeTabTitle.slice(0, 22)}...</span>
         </div>
+
+        {/* Restricted Page Warning Banner */}
+        {activeTabUrl && isRestrictedPage(activeTabUrl) && (
+          <div style={{
+            background: "rgba(255,180,0,0.12)",
+            border: "1px solid rgba(255,180,0,0.4)",
+            borderRadius: "8px",
+            padding: "8px 12px",
+            marginBottom: "8px",
+            fontSize: "12px",
+            color: "#ffcc44",
+            lineHeight: "1.5",
+          }}>
+            ⚠️ <strong>Restricted page</strong> — Chrome blocks extensions here.<br />
+            You can still say <em>"open youtube"</em>, <em>"open leetcode"</em> etc. to navigate away.
+          </div>
+        )}
 
         {/* Safety Confirmation Alert Box */}
         {pendingConfirmationAction && (
