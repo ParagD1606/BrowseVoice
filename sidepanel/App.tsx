@@ -46,7 +46,8 @@ type AgentStatus =
 interface SettingsState {
   gnaniApiKey: string;
   languageCode: string;
-  llmProvider: "mock" | "openai-compatible";
+  /** "gemini" = Google AI Studio, "openai-compatible" = any OpenAI-spec API, "mock" = offline demo */
+  llmProvider: "mock" | "openai-compatible" | "gemini";
   llmApiKey: string;
   llmEndpoint: string;
   llmModel: string;
@@ -56,11 +57,19 @@ const DEFAULT_SETTINGS: SettingsState = {
   gnaniApiKey: (import.meta.env.VITE_GNANI_API_KEY as string) || "",
   languageCode: (import.meta.env.VITE_LANGUAGE_CODE as string) || "hi-IN",
   llmProvider:
-    (import.meta.env.VITE_LLM_PROVIDER as "mock" | "openai-compatible") ||
-    (import.meta.env.VITE_LLM_API_KEY ? "openai-compatible" : "mock"),
-  llmApiKey: (import.meta.env.VITE_LLM_API_KEY as string) || "",
+    (import.meta.env.VITE_LLM_PROVIDER as "mock" | "openai-compatible" | "gemini") ||
+    (import.meta.env.VITE_GEMINI_API_KEY
+      ? "gemini"
+      : import.meta.env.VITE_LLM_API_KEY
+        ? "openai-compatible"
+        : "mock"),
+  // Unified API key field: Gemini key takes priority, fallback to generic LLM key
+  llmApiKey:
+    (import.meta.env.VITE_GEMINI_API_KEY as string) ||
+    (import.meta.env.VITE_LLM_API_KEY as string) ||
+    "",
   llmEndpoint: (import.meta.env.VITE_LLM_ENDPOINT as string) || "https://api.openai.com/v1",
-  llmModel: (import.meta.env.VITE_LLM_MODEL as string) || "gpt-4o-mini",
+  llmModel: (import.meta.env.VITE_LLM_MODEL as string) || "gemini-2.0-flash",
 };
 
 export const App: React.FC = () => {
@@ -698,14 +707,50 @@ export const App: React.FC = () => {
                 onChange={(e) =>
                   setSettings({
                     ...settings,
-                    llmProvider: e.target.value as "mock" | "openai-compatible",
+                    llmProvider: e.target.value as "mock" | "openai-compatible" | "gemini",
                   })
                 }
               >
                 <option value="mock">Rule-Based Mock Planner (Offline Demo)</option>
+                <option value="gemini">Google Gemini (AI Studio)</option>
                 <option value="openai-compatible">OpenAI-Compatible LLM</option>
               </select>
             </div>
+
+            {/* Gemini fields: only API key needed (endpoint is automatic) */}
+            {settings.llmProvider === "gemini" && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">Gemini API Key (Google AI Studio)</label>
+                  <input
+                    type="password"
+                    className="form-input"
+                    placeholder="AIza..."
+                    value={settings.llmApiKey}
+                    onChange={(e) => setSettings({ ...settings, llmApiKey: e.target.value })}
+                  />
+                  <span className="form-help">
+                    Get your free key at{" "}
+                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+                      aistudio.google.com/apikey
+                    </a>
+                  </span>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Gemini Model</label>
+                  <select
+                    className="form-select"
+                    value={settings.llmModel}
+                    onChange={(e) => setSettings({ ...settings, llmModel: e.target.value })}
+                  >
+                    <option value="gemini-2.0-flash">gemini-2.0-flash (Recommended)</option>
+                    <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                    <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                  </select>
+                </div>
+              </>
+            )}
 
             {settings.llmProvider === "openai-compatible" && (
               <>

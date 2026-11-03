@@ -36,10 +36,10 @@ export interface PlannerProvider {
 }
 
 export interface LLMConfig {
-  provider: "openai-compatible" | "mock";
+  provider: "openai-compatible" | "gemini" | "mock";
   endpoint?: string; // e.g. https://api.openai.com/v1 or https://openrouter.ai/api/v1
   apiKey?: string;
-  model?: string; // e.g. gpt-4o-mini, deepseek-chat
+  model?: string; // e.g. gemini-2.0-flash, gpt-4o-mini, deepseek-chat
 }
 
 /**
@@ -163,15 +163,20 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
 
     return result.action;
   }
+}
 
-  private buildUserPrompt(request: PlannerRequest): string {
-    const recentHistory = (request.history || []).slice(-5).map((step) => ({
-      stepNumber: step.stepNumber,
-      action: step.action,
-      status: step.status,
-    }));
+/**
+ * Shared helper to format the planner prompt into structured JSON context.
+ */
+export function buildPlannerPrompt(request: PlannerRequest): string {
+  const recentHistory = (request.history || []).slice(-5).map((step) => ({
+    stepNumber: step.stepNumber,
+    action: step.action,
+    status: step.status,
+  }));
 
-    return JSON.stringify({
+  return JSON.stringify(
+    {
       userRequest: request.userRequest,
       pendingConfirmation: Boolean(request.pendingConfirmation),
       page: {
@@ -188,7 +193,103 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
         })),
       },
       last5Steps: recentHistory,
-    }, null, 2);
+    },
+    null,
+    2
+  );
+}
+
+/**
+ * Google Gemini Planner Provider (using Google AI Studio API).
+ * Endpoint: https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}
+ */
+export class GeminiPlanner implements PlannerProvider {
+  readonly id = "gemini";
+  readonly name: string;
+  private apiKey: string;
+  private model: string;
+
+  constructor(config: LLMConfig) {
+    this.apiKey = config.apiKey || "";
+    this.model = config.model || "gemini-2.0-flash";
+    this.name = `Google Gemini (${this.model})`;
+  }
+
+  public async plan(request: PlannerRequest): Promise<PlannerAction> {
+    if (!this.apiKey) {
+      throw new Error("Google Gemini API Key is missing. Please set it in Browse Voice Settings or .env.");
+    }
+
+    const promptText = buildPlannerPrompt(request);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+
+    const bodyPayload = {
+      systemInstruction: {
+        parts: [{ text: PLANNER_SYSTEM_PROMPT }],
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: promptText }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        responseMimeType: "application/json",
+      },
+    };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(bodyPayload),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini API returned ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json();
+    const content = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!content || typeof content !== "string") {
+      throw new Error("Gemini returned empty or malformed completion.");
+    }
+
+    const validation = parseAndValidatePlannerJson(content);
+    if (!validation.valid) {
+      return this.retryCorrection(content, validation.error);
+    }
+
+    return validation.action;
+  }
+
+  private async retryCorrection(invalidRaw: string, errorMsg: string): Promise<PlannerAction> {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+    const correctionText = `Your previous response was invalid JSON or violated schema: "${errorMsg}".\nPrevious response: ${invalidRaw}\nPlease correct it and return ONLY valid JSON.`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: PLANNER_SYSTEM_PROMPT }] },
+        contents: [{ role: "user", parts: [{ text: correctionText }] }],
+        generationConfig: { temperature: 0.0, responseMimeType: "application/json" },
+      }),
+    });
+
+    const data = await response.json();
+    const content = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const result = parseAndValidatePlannerJson(content);
+
+    if (!result.valid) {
+      throw new Error(`Gemini LLM failed schema validation twice: ${result.error}`);
+    }
+
+    return result.action;
   }
 }
 
@@ -346,8 +447,12 @@ export class MockRuleBasedPlanner implements PlannerProvider {
 
 /**
  * Factory creating the active planner provider based on configuration.
+ * Supports: "gemini" (Google AI Studio), "openai-compatible", "mock".
  */
 export function createPlanner(config: LLMConfig): PlannerProvider {
+  if (config.provider === "gemini" && config.apiKey) {
+    return new GeminiPlanner(config);
+  }
   if (config.provider === "openai-compatible" && config.apiKey) {
     return new OpenAICompatiblePlanner(config);
   }
