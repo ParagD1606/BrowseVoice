@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Microphone access | Browse Voice</title>
+    <link rel="stylesheet" href="./mic-permission.css" />
+  </head>
+  <body>
+    <main class="permission-card">
+      <h1>Allow Browse Voice to use your microphone</h1>
+      <p>Choose the button below, then allow microphone access in Chrome.</p>
+      <button id="request-microphone" type="button">Allow microphone</button>
+      <p id="permission-status" role="status" aria-live="polite"></p>
+      <a id="microphone-settings" hidden>Open Chrome microphone settings</a>
+    </main>
+    <script type="module" src="./mic-permission.ts"></script>
+  </body>
+</html>

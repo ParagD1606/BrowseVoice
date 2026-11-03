@@ -33,7 +33,7 @@ import {
   isConfirmationCommand,
   type PageSnapshot,
 } from "../lib/safety";
-import type { PlannerAction } from "../lib/schema";
+import { validatePlannerAction, type PlannerAction } from "../lib/schema";
 import { MicrophoneSession } from "./mic";
 
 type AgentStatus =
@@ -53,6 +53,100 @@ interface SettingsState {
   llmApiKey: string;
   llmEndpoint: string;
   llmModel: string;
+}
+
+interface FormFieldDescriptor {
+  fingerprint: string;
+  identity: string;
+  occurrence: number;
+  label: string;
+  tag: string;
+  type?: string;
+  kind: "text" | "select" | "checkbox" | "radio";
+  name?: string;
+  options?: string[];
+}
+
+interface FormFillSession {
+  tabId: number;
+  goal: string;
+  fields: FormFieldDescriptor[];
+  index: number;
+  completed: Set<string>;
+  skippedManualCount: number;
+}
+
+function collectFormFields(snapshot: PageSnapshot): { fields: FormFieldDescriptor[]; manualCount: number } {
+  const occurrenceByIdentity = new Map<string, number>();
+  let manualCount = 0;
+  const fields: FormFieldDescriptor[] = [];
+  const radioGroups = new Map<string, { field: FormFieldDescriptor; labels: string[] }>();
+  for (const element of snapshot.interactiveElements) {
+    if (!["input", "textarea", "select"].includes(element.tag)) continue;
+    const type = (element.type || "text").toLowerCase();
+    if (element.tag === "input" && ["button", "submit", "reset", "hidden", "image"].includes(type)) continue;
+    if (element.tag === "input" && type === "file") { manualCount += 1; continue; }
+    if (element.isSensitive) {
+      manualCount += 1;
+      continue;
+    }
+
+    const label = element.label.trim() || element.placeholder?.trim() || element.name?.trim() || `${element.tag} field`;
+    if (element.tag === "input" && type === "radio") {
+      const groupName = element.name || label;
+      const identity = JSON.stringify(["radio", groupName]);
+      const existingGroup = radioGroups.get(identity);
+      if (existingGroup) {
+        if (!existingGroup.labels.includes(label)) existingGroup.labels.push(label);
+      } else {
+        const occurrence = occurrenceByIdentity.get(identity) || 0;
+        occurrenceByIdentity.set(identity, occurrence + 1);
+        const field: FormFieldDescriptor = {
+          fingerprint: `${identity}#${occurrence}`, identity, occurrence,
+          label: groupName.replace(/[_-]+/g, " "), tag: element.tag, type,
+          kind: "radio", name: element.name, options: [label],
+        };
+        radioGroups.set(identity, { field, labels: field.options! });
+        fields.push(field);
+      }
+      continue;
+    }
+
+    const identity = JSON.stringify([element.tag, element.type || "", label, element.name || "", element.placeholder || ""]);
+    const occurrence = occurrenceByIdentity.get(identity) || 0;
+    occurrenceByIdentity.set(identity, occurrence + 1);
+    const kind = element.tag === "select" ? "select" : type === "checkbox" ? "checkbox" : "text";
+    fields.push({ fingerprint: `${identity}#${occurrence}`, identity, occurrence, label, tag: element.tag, type: element.type, kind, name: element.name, options: kind === "select" ? element.options || [] : undefined });
+  }
+  return { fields, manualCount };
+}
+
+function findFormField(snapshot: PageSnapshot, descriptor: FormFieldDescriptor, answer?: string) {
+  if (descriptor.kind === "radio") {
+    const answerText = (answer || "").trim().toLowerCase();
+    const optionIndex = /^\d+$/.test(answerText) ? Number(answerText) - 1 : -1;
+    const selectedLabel = optionIndex >= 0
+      ? descriptor.options?.[optionIndex]
+      : descriptor.options?.find((option) => option.toLowerCase() === answerText || option.toLowerCase().includes(answerText));
+    if (!selectedLabel) return undefined;
+    return snapshot.interactiveElements.find((element) =>
+      element.tag === "input" && element.type?.toLowerCase() === "radio" && element.name === descriptor.name
+      && element.label.trim().toLowerCase() === selectedLabel.toLowerCase() && !element.isSensitive,
+    );
+  }
+  const matches = snapshot.interactiveElements.filter((element) => {
+    const label = element.label.trim() || element.placeholder?.trim() || element.name?.trim() || `${element.tag} field`;
+    const identity = JSON.stringify([element.tag, element.type || "", label, element.name || "", element.placeholder || ""]);
+    return identity === descriptor.identity && !element.isSensitive;
+  });
+  return matches[descriptor.occurrence];
+}
+
+function parseYesNo(value: string): boolean | null {
+  const answer = value.trim();
+  if (/^(yes|y|yeah|haan|ha|check|tick|true)(?:\b|$)/i.test(answer) || /^(हाँ|हां)(?:\s|$|[,!.])/u.test(answer)) return true;
+  if (/^(no|n|nope|nahin|nahi|leave unchecked|false)(?:\b|$)/i.test(answer) || /^(नहीं|नहि)(?:\s|$|[,!.])/u.test(answer)) return false;
+  return null;
 }
 
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
@@ -125,6 +219,7 @@ export const App: React.FC = () => {
   // Agent state
   const [status, setStatus] = useState<AgentStatus>("idle");
   const [statusText, setStatusText] = useState<string>("Ready / तैयार");
+  const [showMicPermissionHelp, setShowMicPermissionHelp] = useState(false);
   const [transcript, setTranscript] = useState<string>("");
   const [activeTabTitle, setActiveTabTitle] = useState<string>("");
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
@@ -145,6 +240,10 @@ export const App: React.FC = () => {
   const gnaniWsRef = useRef<GnaniPrismaWebSocketClient | null>(null);
   const isStoppedRef = useRef<boolean>(false);
   const stepsRef = useRef<StepLogEntry[]>([]);
+  const taskGoalRef = useRef<string | null>(null);
+  const conversationRef = useRef<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const awaitingUserReplyRef = useRef(false);
+  const formFillRef = useRef<FormFillSession | null>(null);
   stepsRef.current = steps;
 
   // Load saved settings from chrome.storage.local
@@ -220,6 +319,10 @@ export const App: React.FC = () => {
     setStatus("stopped");
     setStatusText("Stopped / रोक दिया गया");
     setPendingConfirmationAction(null);
+    taskGoalRef.current = null;
+    conversationRef.current = [];
+    awaitingUserReplyRef.current = false;
+    formFillRef.current = null;
 
     // Notify tab content script to remove indicator
     if (activeTabId) {
@@ -257,6 +360,132 @@ export const App: React.FC = () => {
     if (!isStoppedRef.current) {
       setStatus("idle");
     }
+  };
+
+  const askNextFormField = async () => {
+    const session = formFillRef.current;
+    const field = session?.fields[session.index];
+    if (!session || !field) return;
+    const question = field.kind === "select"
+      ? `Which option should I choose for ${field.label}? ${field.options?.join(", ") || ""}`
+      : field.kind === "checkbox"
+        ? `Should I check ${field.label}? Please answer yes or no.`
+        : field.kind === "radio"
+          ? `Which option should I choose for ${field.label}? ${field.options?.join(", ") || ""}`
+          : `What should I enter for ${field.label}?`;
+    setStatus("idle");
+    setStatusText(`Field ${session.index + 1} of ${session.fields.length}: ${field.label}`);
+    await speakStatus(question);
+    setStatusText(`Reply with a value for ${field.label}`);
+  };
+
+  const submitFormFieldAnswer = async (answer: string) => {
+    const session = formFillRef.current;
+    const field = session?.fields[session.index];
+    if (!session || !field) return false;
+    const value = answer.trim();
+    if (!value) {
+      setStatusText(`Please answer for ${field.label} before continuing.`);
+      return true;
+    }
+
+    setStatus("thinking");
+    setStatusText(`Filling ${field.label}...`);
+    try {
+      const freshSnapshot = await fetchPageSnapshot(session.tabId);
+      const checkboxChoice = field.kind === "checkbox" ? parseYesNo(value) : null;
+      if (field.kind === "checkbox" && checkboxChoice === null) {
+        setStatus("idle");
+        setStatusText(`Please answer yes or no for ${field.label}.`);
+        return true;
+      }
+
+      const element = findFormField(freshSnapshot, field, field.kind === "radio" ? value : undefined);
+      if (!element && field.kind === "radio") {
+        setStatus("idle");
+        setStatusText(`Choose one of these options for ${field.label}: ${field.options?.join(", ") || ""}`);
+        return true;
+      }
+      if (!element) throw new Error(`I can no longer find the ${field.label} field. Check the page and try again.`);
+      let selectedValue = value;
+      if (field.kind === "select") {
+        const match = field.options?.find((option) => option.toLowerCase() === value.toLowerCase() || option.toLowerCase().includes(value.toLowerCase()));
+        if (field.options?.length && !match) {
+          setStatus("idle");
+          setStatusText(`Choose one of these options for ${field.label}: ${field.options.join(", ")}`);
+          return true;
+        }
+        selectedValue = match || value;
+      }
+      let candidate: PlannerAction | null;
+      if (field.kind === "checkbox") {
+        candidate = element.checked === checkboxChoice ? null : { action: "click", id: element.id, rationale: `${checkboxChoice ? "Checked" : "Unchecked"} ${field.label}.` };
+      } else if (field.kind === "radio") {
+        candidate = element.checked ? null : { action: "click", id: element.id, rationale: `Selected ${value} for ${field.label}.` };
+      } else if (field.kind === "select") {
+        candidate = { action: "select", id: element.id, value: selectedValue };
+      } else {
+        candidate = { action: "type", id: element.id, text: value };
+      }
+
+      let response: { ok: boolean; error?: string; freshSnapshot?: PageSnapshot } | null = null;
+      if (candidate) {
+        const validation = validatePlannerAction(candidate);
+        if (!validation.valid) throw new Error(validation.error);
+        const safety = inspectActionSafety(validation.action, freshSnapshot);
+        if (!safety.permitted) throw new Error(safety.reason || "Safety blocked this field.");
+        if (safety.requiresConfirmation) {
+          session.skippedManualCount += 1;
+          await speakStatus(`I left ${field.label} unchanged because it needs a separate confirmation. I will continue to the next field.`);
+        } else {
+          response = await chrome.tabs.sendMessage(session.tabId, {
+            type: "BV_EXECUTE_ACTION",
+            action: validation.action,
+          });
+          if (!response?.ok) throw new Error(response?.error || `Could not fill ${field.label}.`);
+
+          const stepNumber = stepsRef.current.length + 1;
+          setSteps((previous) => [...previous, {
+            stepNumber,
+            action: validation.action,
+            status: "success",
+            spokenSummary: `Filled ${field.label}.`,
+            timestamp: Date.now(),
+          }]);
+        }
+      }
+      session.completed.add(field.fingerprint);
+
+      const updatedSnapshot = (response?.freshSnapshot || await fetchPageSnapshot(session.tabId)) as PageSnapshot;
+      const refreshed = collectFormFields(updatedSnapshot);
+      session.skippedManualCount = Math.max(session.skippedManualCount, refreshed.manualCount);
+      session.fields = refreshed.fields.filter((candidateField) => !session.completed.has(candidateField.fingerprint));
+      session.index = 0;
+
+      if (session.fields.length === 0) {
+        const skippedMessage = session.skippedManualCount > 0
+          ? "The supported fields are filled. Fill any sensitive, file, or protected fields yourself, then review the form. I did not submit it."
+          : "The visible fields are filled. Please review the form. I did not submit it.";
+        formFillRef.current = null;
+        taskGoalRef.current = null;
+        conversationRef.current = [];
+        awaitingUserReplyRef.current = false;
+        await speakStatus(skippedMessage);
+        setStatus("idle");
+        setStatusText("Form filled. Review before submitting.");
+      } else {
+        await askNextFormField();
+      }
+    } catch (error) {
+      setStatus("idle");
+      setStatusText(error instanceof Error ? error.message : "I could not fill that field.");
+    }
+    return true;
+  };
+
+  const handleUserRequest = async (text: string) => {
+    if (formFillRef.current && await submitFormFieldAnswer(text)) return;
+    await runAgentLoop(text);
   };
 
   /**
@@ -451,6 +680,17 @@ export const App: React.FC = () => {
     setStatus("thinking");
     setStatusText("Analyzing page / पेज की जाँच हो रही है...");
 
+    // A reply to ask_user continues the original task. New commands start a clean context.
+    const isFollowUp = awaitingUserReplyRef.current && taskGoalRef.current !== null;
+    if (!isFollowUp) {
+      taskGoalRef.current = initialRequest;
+      conversationRef.current = [{ role: "user" as const, content: initialRequest }];
+    } else {
+      conversationRef.current = [...conversationRef.current, { role: "user" as const, content: initialRequest }].slice(-6);
+    }
+    const taskGoal = taskGoalRef.current || initialRequest;
+    awaitingUserReplyRef.current = false;
+
     // --- Check if we're on a restricted page (chrome://, new tab, etc.) ---
     const tabInfo = await chrome.tabs.get(activeTabId);
     if (isRestrictedPage(tabInfo.url)) {
@@ -508,6 +748,26 @@ export const App: React.FC = () => {
     });
 
     let currentSnapshot = await fetchPageSnapshot(activeTabId);
+    const formFillIntent = /\b(fill|complete|populate|enter details|register|sign up|apply for|bhar(?:o|na|do|de))\b|फॉर्म|फ़ॉर्म|भर(?:ो|ना|ें)/i.test(taskGoal);
+    if (!formFillRef.current && formFillIntent) {
+      const { fields, manualCount } = collectFormFields(currentSnapshot);
+      if (fields.length > 0) {
+        formFillRef.current = {
+          tabId: activeTabId,
+          goal: taskGoal,
+          fields,
+          index: 0,
+          completed: new Set(),
+          skippedManualCount: manualCount,
+        };
+        if (manualCount > 0) {
+          await speakStatus("I will leave sensitive and file fields for you to handle manually. I will ask about every other visible field one at a time.");
+        }
+        await askNextFormField();
+        return;
+      }
+    }
+
     let stepCount = 0;
     const MAX_STEPS = 15;
 
@@ -522,13 +782,15 @@ export const App: React.FC = () => {
       let action: PlannerAction;
       try {
         action = await planner.plan({
-          userRequest: initialRequest,
+          userRequest: taskGoal,
           snapshot: currentSnapshot,
           history: stepsRef.current.slice(-5),
+          conversation: conversationRef.current,
         });
       } catch (planErr) {
         const errMsg = planErr instanceof Error ? planErr.message : "Planning error.";
         await speakStatus(`योजना बनाने में त्रुटि: ${errMsg}`);
+        if (isFollowUp) awaitingUserReplyRef.current = true;
         break;
       }
 
@@ -586,9 +848,13 @@ export const App: React.FC = () => {
           timestamp: Date.now(),
         };
         setSteps((prev) => [...prev, entry]);
+        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: action.summary }].slice(-6);
         await speakStatus(action.summary);
         setStatus("idle");
         setStatusText("Completed / पूरा हुआ");
+        taskGoalRef.current = null;
+        conversationRef.current = [];
+        awaitingUserReplyRef.current = false;
         break;
       }
 
@@ -602,6 +868,8 @@ export const App: React.FC = () => {
           timestamp: Date.now(),
         };
         setSteps((prev) => [...prev, entry]);
+        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: action.question }].slice(-6);
+        awaitingUserReplyRef.current = true;
         await speakStatus(action.question);
         setStatus("idle");
         setStatusText("Awaiting response / उत्तर की प्रतीक्षा");
@@ -635,6 +903,7 @@ export const App: React.FC = () => {
 
       // Record successful step
       const rationaleText = action.rationale || `Executed ${action.action}`;
+      conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: rationaleText }].slice(-6);
       setSteps((prev) => [
         ...prev,
         {
@@ -724,10 +993,11 @@ export const App: React.FC = () => {
           await confirmAndResumeAction();
           return;
         }
-        await runAgentLoop(text);
+        await handleUserRequest(text);
       }
     } else {
       // Start recording
+      setShowMicPermissionHelp(false);
       setTranscript("");
       setStatus("listening");
       setStatusText("Listening / सुन रहे हैं... ('रुको' कहने पर रुक जाएगा)");
@@ -772,7 +1042,7 @@ export const App: React.FC = () => {
               } else if (pendingConfirmationAction && isConfirmationCommand(text)) {
                 confirmAndResumeAction();
               } else {
-                runAgentLoop(text);
+                handleUserRequest(text);
               }
             }
           },
@@ -780,8 +1050,15 @@ export const App: React.FC = () => {
         );
       } catch (err) {
         setStatus("idle");
-        setStatusText("Microphone access error");
-        alert(`Microphone permission error: ${err instanceof Error ? err.message : String(err)}`);
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        const errorName = err instanceof DOMException ? err.name : "";
+        if (errorName === "NotAllowedError" || errorMessage.includes("Permission dismissed")) {
+          setStatusText("Approve microphone access in the new tab");
+          setShowMicPermissionHelp(true);
+        } else {
+          setStatusText("Microphone access error");
+          alert(`Microphone error: ${errorMessage}`);
+        }
       }
     }
   };
@@ -808,7 +1085,7 @@ export const App: React.FC = () => {
       return;
     }
 
-    runAgentLoop(prompt);
+    void handleUserRequest(prompt);
   };
 
   return (
@@ -908,6 +1185,23 @@ export const App: React.FC = () => {
               ? "Listening... Tap to stop or say 'रुको' to cancel"
               : "Tap mic to speak (e.g. 'बिजली बिल देखो', 'bill bharo')"}
           </div>
+          {showMicPermissionHelp && (
+            <div className="mic-permission-help">
+              <span>Chrome needs microphone approval in a regular tab.</span>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => {
+                  chrome.tabs.create({
+                    url: chrome.runtime.getURL("sidepanel/mic-permission.html"),
+                  });
+                }}
+              >
+                Grant microphone access
+              </button>
+              <span>Allow access there, close that tab, then tap the microphone again.</span>
+            </div>
+          )}
 
           {/* Live Transcript View */}
           <div className="transcript-card">

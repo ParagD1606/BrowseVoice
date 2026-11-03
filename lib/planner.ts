@@ -26,6 +26,7 @@ export interface PlannerRequest {
   userRequest: string;
   snapshot: PageSnapshot;
   history: StepLogEntry[]; // last 5 steps
+  conversation?: Array<{ role: "user" | "assistant"; content: string }>;
   pendingConfirmation?: boolean;
 }
 
@@ -205,28 +206,32 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
       throw new Error("LLM API Key is missing. Please set it in Browse Voice Settings.");
     }
 
-    const promptText = buildPlannerPrompt(request);
-
-    const messages = [
-      { role: "system", content: PLANNER_SYSTEM_PROMPT },
-      { role: "user", content: promptText },
-    ];
-
-    const bodyPayload = {
-      model: this.model,
-      messages,
-      temperature: 0.1,
-      response_format: { type: "json_object" },
-    };
-
-    const response = await fetch(`${this.endpoint}/chat/completions`, {
+    const sendPrompt = (prompt: string) => fetch(`${this.endpoint}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify(bodyPayload),
+      body: JSON.stringify({
+        model: this.model,
+        messages: [
+          { role: "system", content: PLANNER_SYSTEM_PROMPT },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.1,
+        // Planner responses are short JSON actions. Avoid reserving the provider's
+        // default completion budget against a limited per-minute token allowance.
+        max_tokens: 512,
+        response_format: { type: "json_object" },
+      }),
     });
+
+    let response = await sendPrompt(buildPlannerPrompt(request));
+    if (response.status === 413) {
+      // Retry once with a smaller page slice if the provider rejected the first
+      // request for size/TPM. Element IDs still refer to the same fresh snapshot.
+      response = await sendPrompt(buildPlannerPrompt(request, { maxElements: 8, maxSummaryLength: 80 }));
+    }
 
     if (!response.ok) {
       const errText = await response.text();
@@ -268,6 +273,7 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
         model: this.model,
         messages: correctionMessages,
         temperature: 0.0,
+        max_tokens: 512,
         response_format: { type: "json_object" },
       }),
     });
@@ -287,35 +293,58 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
 /**
  * Shared helper to format the planner prompt into structured JSON context.
  */
-export function buildPlannerPrompt(request: PlannerRequest): string {
+export function buildPlannerPrompt(
+  request: PlannerRequest,
+  limits: { maxElements?: number; maxSummaryLength?: number } = {},
+): string {
+  const maxElements = limits.maxElements ?? 24;
+  const maxSummaryLength = limits.maxSummaryLength ?? 240;
+  const words = request.userRequest.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || [];
+  const taskTerms = new Set(words.filter((word) => !["the", "and", "for", "from", "with", "play", "video", "please", "करो", "करना"].includes(word)));
+  const allElements = request.snapshot.interactiveElements;
+  const rankedElements = allElements.map((element, order) => {
+    const text = `${element.label} ${element.name || ""} ${element.placeholder || ""} ${element.role}`.toLowerCase();
+    const matches = Array.from(taskTerms).reduce((count, term) => count + Number(text.includes(term)), 0);
+    const isSearch = /search|query|find|खोज/i.test(text) || element.type === "search";
+    const isResult = /video|watch|play|music|song|clip/i.test(text);
+    return { element, order, score: matches * 10 + Number(isSearch && /search|find|play|video|music/i.test(request.userRequest)) * 8 + Number(isResult) * 3 };
+  });
+  const selectedElements = rankedElements
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+    .slice(0, maxElements)
+    .sort((a, b) => a.order - b.order)
+    .map(({ element: el }) => ({
+      id: el.id,
+      role: el.role.slice(0, 24),
+      label: el.label.slice(0, 90),
+      type: el.type,
+      value: (el.value || "").slice(0, 80),
+      isSensitive: el.isSensitive,
+    }));
+
   const recentHistory = (request.history || []).slice(-5).map((step) => ({
     stepNumber: step.stepNumber,
-    action: step.action,
+    action: step.action.action,
     status: step.status,
+    rationale: step.action.rationale?.slice(0, 80),
   }));
 
-  return JSON.stringify(
-    {
-      userRequest: request.userRequest,
-      pendingConfirmation: Boolean(request.pendingConfirmation),
-      page: {
-        url: request.snapshot.url,
-        title: request.snapshot.title,
-        summary: request.snapshot.summary,
-        interactiveElements: request.snapshot.interactiveElements.map((el) => ({
-          id: el.id,
-          role: el.role,
-          label: el.label,
-          type: el.type,
-          value: el.value,
-          isSensitive: el.isSensitive,
-        })),
-      },
-      last5Steps: recentHistory,
+  return JSON.stringify({
+    userRequest: request.userRequest.slice(0, 500),
+      recentConversation: (request.conversation || []).slice(-6).map((turn) => ({
+        role: turn.role,
+        content: turn.content.slice(0, 180),
+      })),
+    pendingConfirmation: Boolean(request.pendingConfirmation),
+    page: {
+      url: request.snapshot.url.slice(0, 300),
+      title: request.snapshot.title.slice(0, 160),
+      summary: request.snapshot.summary.slice(0, maxSummaryLength),
+      interactiveElements: selectedElements,
+      omittedInteractiveElementCount: Math.max(0, allElements.length - selectedElements.length),
     },
-    null,
-    2
-  );
+    last5Steps: recentHistory,
+  });
 }
 
 /**

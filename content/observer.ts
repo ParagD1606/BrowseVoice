@@ -184,6 +184,10 @@ export function capturePageSnapshot(): PageSnapshot {
       name,
       placeholder,
       value: safeValue,
+      checked: el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio") ? el.checked : undefined,
+      options: el instanceof HTMLSelectElement
+        ? Array.from(el.options).map((option) => option.text.trim()).filter(Boolean).slice(0, 30)
+        : undefined,
       isSensitive: sensitivity.isSensitive,
       sensitiveReason: sensitivity.reason,
     });

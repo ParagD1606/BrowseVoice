@@ -25,6 +25,8 @@ export interface InteractiveElement {
   name?: string;
   placeholder?: string;
   value?: string;
+  checked?: boolean;
+  options?: string[];
   isSensitive: boolean;
   sensitiveReason?: string;
   selector?: string;
