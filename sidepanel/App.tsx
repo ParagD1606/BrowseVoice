@@ -219,6 +219,7 @@ export const App: React.FC = () => {
   // Agent state
   const [status, setStatus] = useState<AgentStatus>("idle");
   const [statusText, setStatusText] = useState<string>("Ready / तैयार");
+  const [voiceSessionActive, setVoiceSessionActive] = useState(false);
   const [showMicPermissionHelp, setShowMicPermissionHelp] = useState(false);
   const [transcript, setTranscript] = useState<string>("");
   const [activeTabTitle, setActiveTabTitle] = useState<string>("");
@@ -244,6 +245,11 @@ export const App: React.FC = () => {
   const conversationRef = useRef<Array<{ role: "user" | "assistant"; content: string }>>([]);
   const awaitingUserReplyRef = useRef(false);
   const formFillRef = useRef<FormFillSession | null>(null);
+  const voiceSessionActiveRef = useRef(false);
+  const voiceTurnProcessingRef = useRef(false);
+  const voiceListenGenerationRef = useRef(0);
+  const voiceTurnHandlerRef = useRef<(text: string) => Promise<void>>(async () => {});
+  const startVoiceListeningRef = useRef<() => Promise<void>>(async () => {});
   stepsRef.current = steps;
 
   // Load saved settings from chrome.storage.local
@@ -315,6 +321,9 @@ export const App: React.FC = () => {
     micSessionRef.current.stop();
     gnaniWsRef.current?.disconnect();
     stopAllSpeech();
+    voiceSessionActiveRef.current = false;
+    setVoiceSessionActive(false);
+    voiceListenGenerationRef.current += 1;
 
     setStatus("stopped");
     setStatusText("Stopped / रोक दिया गया");
@@ -965,12 +974,55 @@ export const App: React.FC = () => {
     }
   };
 
-  /**
-   * Toggle Voice Dictation / Recording
-   */
-  const toggleRecording = async () => {
-    if (micSessionRef.current.isActive()) {
-      // User tapped stop recording
+  const startVoiceListening = async () => {
+    if (!voiceSessionActiveRef.current || micSessionRef.current.isActive()) return;
+    const generation = ++voiceListenGenerationRef.current;
+    setShowMicPermissionHelp(false);
+    setTranscript("");
+    setStatusText("Listening / सुन रहे हैं... ('रुको' कहने पर सत्र बंद होगा)");
+
+    try {
+      if (settings.gnaniApiKey) {
+        gnaniWsRef.current = new GnaniPrismaWebSocketClient(
+          { apiKey: settings.gnaniApiKey, languageCode: settings.languageCode, sttModel: "prisma-v3.0" },
+          (text) => {
+            if (generation === voiceListenGenerationRef.current && voiceSessionActiveRef.current) setTranscript(text);
+          },
+          (err) => console.warn("Prisma WS error:", err),
+        );
+        await gnaniWsRef.current.connect().catch((error) => console.warn("Prisma connect fallback:", error));
+      }
+
+      await micSessionRef.current.start(
+        (pcmChunk) => {
+          if (generation === voiceListenGenerationRef.current) gnaniWsRef.current?.sendAudioChunk(pcmChunk);
+        },
+        (text, isFinal) => {
+          if (generation !== voiceListenGenerationRef.current || !voiceSessionActiveRef.current) return;
+          setTranscript(text);
+          if (isStopCommand(text)) {
+            handleEmergencyStop();
+            return;
+          }
+          if (isFinal && !voiceTurnProcessingRef.current) {
+            micSessionRef.current.stop();
+            gnaniWsRef.current?.disconnect();
+            void voiceTurnHandlerRef.current(text);
+          }
+        },
+        settings.languageCode,
+      );
+
+      if (generation !== voiceListenGenerationRef.current || !voiceSessionActiveRef.current) {
+        micSessionRef.current.stop();
+        gnaniWsRef.current?.disconnect();
+        return;
+      }
+      setStatus("listening");
+      setStatusText("Listening / सुन रहे हैं... ('रुको' कहने पर सत्र बंद होगा)");
+    } catch (err) {
+      voiceSessionActiveRef.current = false;
+      setVoiceSessionActive(false);
       micSessionRef.current.stop();
       gnaniWsRef.current?.disconnect();
       setStatus("idle");
@@ -1063,6 +1115,64 @@ export const App: React.FC = () => {
     }
   };
 
+  const processVoiceTurn = async (text: string) => {
+    if (voiceTurnProcessingRef.current) return;
+    voiceTurnProcessingRef.current = true;
+    voiceListenGenerationRef.current += 1;
+    micSessionRef.current.stop();
+    gnaniWsRef.current?.disconnect();
+    try {
+      if (isStopCommand(text)) {
+        handleEmergencyStop();
+        return;
+      }
+      if (pendingConfirmationAction) {
+        if (isConfirmationCommand(text)) await confirmAndResumeAction();
+        else {
+          setPendingConfirmationAction(null);
+          setStatus("idle");
+          await speakStatus("I cancelled that action.");
+        }
+      } else {
+        await handleUserRequest(text);
+      }
+    } catch (error) {
+      setStatus("idle");
+      setStatusText(error instanceof Error ? error.message : "I could not process that reply.");
+    } finally {
+      voiceTurnProcessingRef.current = false;
+      if (voiceSessionActiveRef.current && !micSessionRef.current.isActive()) {
+        void startVoiceListeningRef.current();
+      }
+    }
+  };
+
+  voiceTurnHandlerRef.current = processVoiceTurn;
+  startVoiceListeningRef.current = startVoiceListening;
+
+  /** One tap starts voice conversation mode; another tap ends it. */
+  const toggleRecording = async () => {
+    if (voiceSessionActiveRef.current) {
+      const partialTranscript = transcript.trim();
+      voiceSessionActiveRef.current = false;
+      setVoiceSessionActive(false);
+      voiceListenGenerationRef.current += 1;
+      micSessionRef.current.stop();
+      gnaniWsRef.current?.disconnect();
+      if (partialTranscript && !voiceTurnProcessingRef.current) {
+        await processVoiceTurn(partialTranscript);
+      } else if (!voiceTurnProcessingRef.current) {
+        setStatus("idle");
+        setStatusText("Ready / तैयार");
+      }
+      return;
+    }
+
+    voiceSessionActiveRef.current = true;
+    setVoiceSessionActive(true);
+    await startVoiceListening();
+  };
+
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentPrompt.trim()) return;
@@ -1146,16 +1256,12 @@ export const App: React.FC = () => {
             </div>
             <p className="confirmation-text">{confirmationMessage}</p>
             <div className="confirmation-actions">
-              <button className="btn-confirm-yes" onClick={confirmAndResumeAction}>
+              <button className="btn-confirm-yes" onClick={() => void processVoiceTurn("yes")}>
                 ✓ Haan / Yes (पुष्टि करें)
               </button>
               <button
                 className="btn-confirm-no"
-                onClick={() => {
-                  setPendingConfirmationAction(null);
-                  setStatus("idle");
-                  setStatusText("Cancelled / रद्द किया गया");
-                }}
+                onClick={() => void processVoiceTurn("no")}
               >
                 ✕ Cancel / रद्द करें
               </button>
@@ -1173,17 +1279,19 @@ export const App: React.FC = () => {
             </button>
           </div>
           <button
-            className={`mic-button ${status === "listening" ? "recording" : ""}`}
+            className={`mic-button ${voiceSessionActive ? "recording" : ""}`}
             onClick={toggleRecording}
-            title="Tap to speak in Hindi/Indian Languages"
+            title={voiceSessionActive ? "Tap to end voice conversation" : "Tap to start a voice conversation"}
             aria-label={status === "listening" ? "Stop listening" : "Start voice input"}
           >
             {status === "listening" ? <span className="recording-mark" /> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8"/></svg>}
           </button>
           <div className="mic-help">
-            {status === "listening"
-              ? "Listening... Tap to stop or say 'रुको' to cancel"
-              : "Tap mic to speak (e.g. 'बिजली बिल देखो', 'bill bharo')"}
+            {voiceSessionActive
+              ? status === "listening"
+                ? "Listening... I will listen again after each reply. Say 'रुको' or tap to end."
+                : "Voice conversation active. I will listen again when I finish this turn. Tap to end."
+              : "Tap mic once to start a conversation (e.g. 'बिजली बिल देखो', 'bill bharo')"}
           </div>
           {showMicPermissionHelp && (
             <div className="mic-permission-help">
