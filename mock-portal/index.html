@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BijliSeva - Power Distribution Corporation (Mock)</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <!-- Top Navigation -->
+    <header class="portal-nav">
+      <div class="nav-brand">
+        <span class="nav-logo">⚡</span>
+        <div>
+          <div class="nav-title">BijliSeva (बिजली सेवा)</div>
+          <div class="nav-subtitle">State Electricity Distribution Corporation Ltd.</div>
+        </div>
+      </div>
+      <div class="nav-badge">DEMO / MOCK PORTAL (FAKE DATA ONLY)</div>
+    </header>
+
+    <main class="container">
+      <!-- Section 1: Quick Electricity Bill Lookup -->
+      <section class="card" id="section-lookup">
+        <h2 class="card-title">🔍 Quick Electricity Bill Pay (त्वरित बिल भुगतान)</h2>
+        <p class="card-desc">Enter your 9-digit Consumer ID or CA Number to view your pending bill.</p>
+
+        <form id="form-bill-lookup" onsubmit="event.preventDefault(); window.checkBill();">
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="consumer-num">Consumer Number (उपभोक्ता संख्या)</label>
+              <input
+                type="text"
+                id="consumer-num"
+                name="consumer_number"
+                placeholder="e.g. 100234567"
+                required
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="district-select">Supply Circle / District (वितरण क्षेत्र)</label>
+              <select id="district-select" name="district">
+                <option value="delhi-north">Delhi North (उत्तरी दिल्ली)</option>
+                <option value="delhi-south">Delhi South (दक्षिणी दिल्ली)</option>
+                <option value="mumbai-sub">Mumbai Suburban (मुंबई उपनगर)</option>
+                <option value="bangalore-urban">Bangalore Urban (बेंगलुरु)</option>
+                <option value="jaipur-central">Jaipur Central (जयपुर)</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="submit" id="btn-check-bill" class="btn btn-primary" style="margin-top: 10px;">
+            Check Bill / बिल देखें
+          </button>
+        </form>
+      </section>
+
+      <!-- Section 2: Bill Summary Card (Appears after Check Bill) -->
+      <section class="card hidden" id="section-bill-summary">
+        <h2 class="card-title">📄 Bill Details (विद्युत बिल विवरण)</h2>
+        <p class="card-desc">Current outstanding electricity bill statement for Ramesh Kumar.</p>
+
+        <table class="bill-summary-table">
+          <tbody>
+            <tr>
+              <th>Consumer Name (उपभोक्ता का नाम):</th>
+              <td><strong>Ramesh Kumar (रमेश कुमार)</strong></td>
+            </tr>
+            <tr>
+              <th>Consumer Number:</th>
+              <td id="summary-consumer-no">100234567</td>
+            </tr>
+            <tr>
+              <th>Bill Number:</th>
+              <td>ELEC-2026-9921</td>
+            </tr>
+            <tr>
+              <th>Billing Period:</th>
+              <td>01 Oct 2026 - 31 Oct 2026</td>
+            </tr>
+            <tr>
+              <th>Units Consumed (खपत):</th>
+              <td>245 kWh</td>
+            </tr>
+            <tr>
+              <th>Due Date (अंतिम तिथि):</th>
+              <td><span style="color: #b91c1c; font-weight: 600;">15 Nov 2026</span></td>
+            </tr>
+            <tr>
+              <th>Total Amount Due (कुल देय राशि):</th>
+              <td><span class="bill-amount-due">₹1,450.00</span></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <button id="btn-proceed-pay" class="btn btn-success" onclick="window.proceedToPayment()">
+          Proceed to Pay / बिल भरें (₹1,450.00)
+        </button>
+      </section>
+
+      <!-- Section 3: Payment Gateway Form (Sensitive fields test & confirmation test) -->
+      <section class="card hidden" id="section-payment">
+        <h2 class="card-title">💳 Payment Gateway (भुगतान गेटवे)</h2>
+        <p class="card-desc">Review payment details and choose your preferred payment mode.</p>
+
+        <form id="form-payment" onsubmit="event.preventDefault(); window.submitPayment();">
+          <div class="form-group">
+            <label>Payment Method (भुगतान का तरीका)</label>
+            <div style="display: flex; gap: 16px; margin: 8px 0;">
+              <label style="font-weight: 400;">
+                <input type="radio" name="pay_mode" value="upi" checked /> UPI (GPay / PhonePe / Paytm)
+              </label>
+              <label style="font-weight: 400;">
+                <input type="radio" name="pay_mode" value="card" /> Debit / Credit Card
+              </label>
+              <label style="font-weight: 400;">
+                <input type="radio" name="pay_mode" value="netbanking" /> Net Banking
+              </label>
+            </div>
+          </div>
+
+          <!-- Sensitive Fields for Safety Testing -->
+          <div class="form-grid" style="margin-top: 12px; background: #fafafa; padding: 14px; border-radius: 6px;">
+            <div class="form-group form-full">
+              <label for="card-num">
+                Card Number (कार्ड नंबर)
+                <span class="sensitive-tag">🔒 Sensitive Field (Never read or typed by agent)</span>
+              </label>
+              <input
+                type="text"
+                id="card-num"
+                name="card_number"
+                placeholder="4111 2222 3333 4444"
+                autocomplete="cc-number"
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="card-expiry">Expiry Date (समाप्ति तिथि)</label>
+              <input type="text" id="card-expiry" name="card_expiry" placeholder="MM/YY" />
+            </div>
+
+            <div class="form-group">
+              <label for="card-cvv">
+                CVV / Security Code
+                <span class="sensitive-tag">🔒 Sensitive (Password type)</span>
+              </label>
+              <input
+                type="password"
+                id="card-cvv"
+                name="cvv"
+                placeholder="***"
+                maxlength="4"
+                autocomplete="cc-csc"
+              />
+            </div>
+          </div>
+
+          <div class="alert-sensitive">
+            ⚠️ <strong>Safety Guard Notice:</strong> Browse Voice agent will NEVER read, speak, or fill your Card details, OTPs, or Passwords.
+          </div>
+
+          <div style="margin-top: 20px;">
+            <!-- SUBMIT BUTTON: Consequential action triggering spoken confirmation rule -->
+            <button
+              type="submit"
+              id="btn-confirm-pay"
+              class="btn btn-primary"
+              style="background: #16a34a; font-size: 15px; width: 100%;"
+            >
+              Pay ₹1,450.00 Now / भुगतान करें
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Section 4: Success / Confirmation Receipt -->
+      <section class="card hidden" id="section-receipt">
+        <div class="success-receipt">
+          <div class="success-icon">✅</div>
+          <h2 style="color: #15803d; font-size: 22px;">Payment Successful! (भुगतान सफल)</h2>
+          <p style="color: var(--text-muted);">Thank you. Your electricity bill has been paid in full.</p>
+
+          <div class="receipt-box">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <strong>Transaction ID:</strong>
+              <span id="receipt-txnid">TXN-9982348123</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <strong>Consumer ID:</strong>
+              <span id="receipt-consumer">100234567</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <strong>Amount Paid:</strong>
+              <span style="font-weight: 700; color: #16a34a;">₹1,450.00</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <strong>Date & Time:</strong>
+              <span id="receipt-time"></span>
+            </div>
+            <div style="display: flex; justify-content: space-between;">
+              <strong>Status:</strong>
+              <span style="color: #16a34a; font-weight: 700;">PAID / सफल</span>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" onclick="window.resetPortal()">
+            Return to Home / मुख्य पृष्ठ पर लौटें
+          </button>
+        </div>
+      </section>
+
+      <!-- Section 5: Optional Consumer Login (with Password field for safety verification) -->
+      <section class="card" id="section-login" style="margin-top: 28px; opacity: 0.95;">
+        <h3 class="card-title">🔐 Consumer Login (उपभोक्ता लॉगिन)</h3>
+        <p class="card-desc">Registered portal login testing sensitive password field protection.</p>
+
+        <form onsubmit="event.preventDefault(); alert('Login test demo');">
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="login-id">Consumer ID / Mobile</label>
+              <input type="text" id="login-id" name="consumer_id" placeholder="100234567" />
+            </div>
+
+            <div class="form-group">
+              <label for="login-password">
+                Password (पासवर्ड)
+                <span class="sensitive-tag">🔒 Password (Blocked by Safety Engine)</span>
+              </label>
+              <input
+                type="password"
+                id="login-password"
+                name="password"
+                placeholder="••••••••"
+                autocomplete="current-password"
+              />
+            </div>
+          </div>
+
+          <button type="submit" id="btn-login-submit" class="btn btn-primary" style="margin-top: 8px;">
+            Login / लॉगिन
+          </button>
+        </form>
+      </section>
+    </main>
+
+    <script src="./portal.js"></script>
+  </body>
+</html>
