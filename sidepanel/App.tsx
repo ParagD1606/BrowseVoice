@@ -485,11 +485,35 @@ export const App: React.FC = () => {
     }
   }, [activeTabId]);
 
+  const sendTabMessage = async <T,>(tabId: number, message: Record<string, unknown>): Promise<T> => {
+    try {
+      return await chrome.tabs.sendMessage(tabId, message) as T;
+    } catch (firstError) {
+      // Navigation can destroy the content-script port. Ask the service worker
+      // to inject the listener into the current document before retrying once.
+      const connection = await chrome.runtime.sendMessage({ type: "BV_ENSURE_TAB_CONNECTED", tabId }).catch(() => null);
+      if (!connection?.ok) {
+        const errorText = firstError instanceof Error ? firstError.message : "The page changed before Browse Voice could connect.";
+        throw new Error(/receiving end|message channel|back.forward cache|bfcache/i.test(errorText)
+          ? "The page changed before Browse Voice could respond. Please try again."
+          : errorText);
+      }
+      try {
+        return await chrome.tabs.sendMessage(tabId, message) as T;
+      } catch (secondError) {
+        const errorText = secondError instanceof Error ? secondError.message : "The page changed before Browse Voice could respond.";
+        throw new Error(/receiving end|message channel|back.forward cache|bfcache/i.test(errorText)
+          ? "The page changed before Browse Voice could respond. Please try again."
+          : errorText);
+      }
+    }
+  };
+
   /**
    * Query snapshot from content script
    */
   const fetchPageSnapshot = async (tabId: number): Promise<PageSnapshot> => {
-    const response = await chrome.tabs.sendMessage(tabId, { type: "BV_GET_SNAPSHOT" });
+    const response = await sendTabMessage<{ ok?: boolean; snapshot?: PageSnapshot; error?: string }>(tabId, { type: "BV_GET_SNAPSHOT" });
     if (!response || !response.ok || !response.snapshot) {
       throw new Error(response?.error || "Failed to retrieve page snapshot from tab.");
     }
@@ -593,7 +617,7 @@ export const App: React.FC = () => {
           session.skippedManualCount += 1;
           await speakStatus(`I left ${field.label} unchanged because it needs a separate confirmation. I will continue to the next field.`);
         } else {
-          response = await chrome.tabs.sendMessage(session.tabId, {
+          response = await sendTabMessage<{ ok: boolean; error?: string; freshSnapshot?: PageSnapshot }>(session.tabId, {
             type: "BV_EXECUTE_ACTION",
             action: validation.action,
           });
@@ -645,6 +669,16 @@ export const App: React.FC = () => {
       return;
     }
     await runAgentLoop(text);
+  };
+
+  const handleUserRequestSafely = async (text: string) => {
+    try {
+      await handleUserRequest(text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Browse Voice could not complete that request.";
+      setStatus("idle");
+      setStatusText(message);
+    }
   };
 
   /**
@@ -746,12 +780,7 @@ export const App: React.FC = () => {
 
     try {
       let selectionResponse: { ok?: boolean; selection?: { rect: { x: number; y: number; width: number; height: number }; viewportWidth: number; text: string; elements: string[]; title: string; url: string }; error?: string };
-      try {
-        selectionResponse = await chrome.tabs.sendMessage(activeTabId, { type: "BV_START_SNIP_SELECTION" });
-      } catch {
-        await chrome.runtime.sendMessage({ type: "BV_ENSURE_TAB_CONNECTED", tabId: activeTabId });
-        selectionResponse = await chrome.tabs.sendMessage(activeTabId, { type: "BV_START_SNIP_SELECTION" });
-      }
+      selectionResponse = await sendTabMessage<{ ok?: boolean; selection?: { rect: { x: number; y: number; width: number; height: number }; viewportWidth: number; text: string; elements: string[]; title: string; url: string }; error?: string }>(activeTabId, { type: "BV_START_SNIP_SELECTION" });
 
       if (!selectionResponse?.ok || !selectionResponse.selection) {
         if (selectionResponse?.error === "Selection cancelled.") {
@@ -1063,18 +1092,10 @@ export const App: React.FC = () => {
     }
 
     // 1. Activate on-page visual indicator
-    try {
-      await chrome.tabs.sendMessage(activeTabId, {
-        type: "BV_ACTIVATE_AGENT",
-        statusText: "Processing",
-      });
-    } catch {
-      // Content script may need injection
-      await chrome.runtime.sendMessage({
-        type: "BV_ENSURE_TAB_CONNECTED",
-        tabId: activeTabId,
-      });
-    }
+    await sendTabMessage(activeTabId, {
+      type: "BV_ACTIVATE_AGENT",
+      statusText: "Processing",
+    });
 
     const planner: PlannerProvider = createPlanner({
       provider: settings.llmProvider,
@@ -1216,7 +1237,7 @@ export const App: React.FC = () => {
       setStatus("executing");
       setStatusText(`${translate("Step", "स्टेप")} ${stepCount}: ${translate("Executing", "कार्रवाई हो रही है")} ${action.action}...`);
 
-      const execResponse = await chrome.tabs.sendMessage(activeTabId, {
+      const execResponse = await sendTabMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(activeTabId, {
         type: "BV_EXECUTE_ACTION",
         action,
       });
@@ -1279,7 +1300,7 @@ export const App: React.FC = () => {
     setStatus("executing");
       setStatusText(translate("Executing confirmed action...", "पुष्टि की गई कार्रवाई हो रही है..."));
 
-    const execResponse = await chrome.tabs.sendMessage(activeTabId, {
+    const execResponse = await sendTabMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(activeTabId, {
       type: "BV_EXECUTE_ACTION",
       action: actionToRun,
     });
@@ -1438,13 +1459,13 @@ export const App: React.FC = () => {
       return;
     }
 
-    void handleUserRequest(prompt);
+    void handleUserRequestSafely(prompt);
   };
 
   const runQuickPrompt = (prompt: string) => {
     setCurrentPrompt("");
     setTranscript(prompt);
-    void handleUserRequest(prompt);
+    void handleUserRequestSafely(prompt);
   };
 
   const updateLanguage = (languageCode: string) => {

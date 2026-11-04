@@ -4,6 +4,9 @@ import { resolve } from "path";
 import { copyFileSync, existsSync, mkdirSync, cpSync } from "fs";
 
 export default defineConfig({
+  // Chrome extension pages are loaded from chrome-extension:// URLs. Relative
+  // asset paths keep the generated side panel portable when unpacked.
+  base: "./",
   plugins: [
     react(),
     {
@@ -32,6 +35,7 @@ export default defineConfig({
     },
   ],
   build: {
+    modulePreload: { polyfill: false },
     outDir: "dist",
     emptyOutDir: true,
     rollupOptions: {
