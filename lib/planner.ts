@@ -471,7 +471,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
         return {
           action: "click",
           id: payConfirmBtn.id,
-          rationale: "पुष्टि प्राप्त हुई। ₹1,450 का भुगतान सबमिट किया जा रहा है।",
+          rationale: "Confirmation received. Submitting the ₹1,450 payment.",
         };
       }
     }
@@ -484,8 +484,8 @@ export class MockRuleBasedPlanner implements PlannerProvider {
     ) {
       return {
         action: "done",
-        summary: "बिजली बिल का भुगतान सफलतापूर्वक पूरा हो गया है। रसीद नंबर स्क्रीन पर उपलब्ध है।",
-        rationale: "भुगतान सफल हुआ।",
+        summary: "The electricity bill payment was completed successfully. The receipt is available on screen.",
+        rationale: "Payment completed successfully.",
       };
     }
 
@@ -498,8 +498,8 @@ export class MockRuleBasedPlanner implements PlannerProvider {
     if (billVisible && (req.includes("dekho") || req.includes("check") || req.includes("show") || req.includes("pending"))) {
       return {
         action: "done",
-        summary: "आपका बिजली बिल ₹1,450 है, देय तिथि 15 नवंबर 2026 है।",
-        rationale: "बिल का विवरण स्क्रीन पर दिखाई दे रहा है।",
+        summary: "Your electricity bill is ₹1,450, due on November 15, 2026.",
+        rationale: "The bill details are visible on screen.",
       };
     }
 
@@ -525,7 +525,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
         return {
           action: "click",
           id: proceedBtn.id,
-          rationale: "भुगतान के लिए आगे बढ़ा जा रहा है।",
+          rationale: "Moving to payment.",
         };
       }
     }
@@ -550,7 +550,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
         action: "type",
         id: consumerInput.id,
         text: consumerNumber,
-        rationale: `कंज्यूमर नंबर ${consumerNumber} दर्ज किया जा रहा है।`,
+        rationale: `Entering consumer number ${consumerNumber}.`,
       };
     }
 
@@ -569,7 +569,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
       return {
         action: "click",
         id: checkBillBtn.id,
-        rationale: "बिल देखने के लिए बटन दबाया जा रहा है।",
+        rationale: "Clicking the bill button.",
       };
     }
 
@@ -579,15 +579,15 @@ export class MockRuleBasedPlanner implements PlannerProvider {
       return {
         action: "click",
         id: firstClickable.id,
-        rationale: `'${firstClickable.label}' पर क्लिक किया जा रहा है।`,
+        rationale: `Clicking '${firstClickable.label}'.`,
       };
     }
 
     return {
       action: "ask_user",
-      question: "आप क्या करना चाहते हैं? उदाहरण: 'बिजली बिल देखो' या 'बिल भरो'।",
-      options: ["बिजली बिल देखो", "कंज्यूमर नंबर 100234567 भरो", "बिल भुगतान करो"],
-      rationale: "उपयोगकर्ता से निर्देश माँगे जा रहे हैं।",
+      question: "What would you like to do? For example: check the electricity bill or pay the bill.",
+      options: ["Check the electricity bill", "Enter consumer number 100234567", "Pay the bill"],
+      rationale: "Asking the user for instructions.",
     };
   }
 }

@@ -36,17 +36,17 @@ export const GNANI_ENDPOINTS = {
 } as const;
 
 export const SUPPORTED_INDIAN_LANGUAGES = [
-  { code: "hi-IN", label: "Hindi (हिंदी)" },
-  { code: "indic-auto", label: "Auto-detect Indic (Prisma v3.0)" },
+  { code: "hi-IN", label: "Hindi" },
+  { code: "indic-auto", label: "Auto-detect Indic" },
   { code: "en-IN", label: "Indian English" },
-  { code: "ta-IN", label: "Tamil (தமிழ்)" },
-  { code: "te-IN", label: "Telugu (తెలుగు)" },
-  { code: "kn-IN", label: "Kannada (ಕನ್ನಡ)" },
-  { code: "mr-IN", label: "Marathi (मराठी)" },
-  { code: "gu-IN", label: "Gujarati (ગુજરાતી)" },
-  { code: "bn-IN", label: "Bengali (বাংলা)" },
-  { code: "pa-IN", label: "Punjabi (ਪੰਜਾਬੀ)" },
-  { code: "ml-IN", label: "Malayalam (മലയാളം)" },
+  { code: "ta-IN", label: "Tamil" },
+  { code: "te-IN", label: "Telugu" },
+  { code: "kn-IN", label: "Kannada" },
+  { code: "mr-IN", label: "Marathi" },
+  { code: "gu-IN", label: "Gujarati" },
+  { code: "bn-IN", label: "Bengali" },
+  { code: "pa-IN", label: "Punjabi" },
+  { code: "ml-IN", label: "Malayalam" },
 ] as const;
 
 // Global audio playback tracking to allow immediate stop on "ruko"

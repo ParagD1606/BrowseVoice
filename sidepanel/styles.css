@@ -449,3 +449,55 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .form-help a { color: var(--blue); }
 .settings-divider { height: 1px; margin: 2px 0; background: var(--line); }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
+
+/* Command-center visual pass inspired by the supplied reference. */
+body { background: #0b1018; }
+.panel-header { padding: 11px 15px; background: #0d121b; border-bottom-color: rgba(121,141,180,.14); }
+.brand-title-row { display: flex; align-items: center; gap: 6px; }
+.brand-live-dot { width: 6px; height: 6px; border-radius: 50%; background: #35c7ee; box-shadow: 0 0 8px rgba(53,199,238,.75); }
+.brand-icon { width: 38px; height: 38px; border-color: rgba(96,93,255,.8); border-radius: 11px; background: #131a2b; box-shadow: inset 0 0 14px rgba(77,93,255,.13); }
+.brand-badge { padding: 3px 8px; color: #c1cce0; background: #182136; border-color: rgba(124,139,195,.24); text-transform: none; letter-spacing: .2px; }
+.language-select { max-width: 132px; margin-top: 3px; padding: 2px 20px 2px 7px; color: #c1cce0; border: 1px solid rgba(124,139,195,.24); border-radius: 999px; outline: none; background: #182136; font-size: 9px; }
+.language-select:focus { border-color: rgba(114,170,255,.7); }
+.language-select option { color: #dce6f2; background: #182136; }
+.header-actions { gap: 6px; }
+.btn-stop { padding: 7px 10px; border-radius: 999px; color: #ff7f91; background: rgba(126,43,68,.24); border-color: rgba(255,111,137,.2); }
+.btn-icon { width: 32px; height: 32px; border-radius: 50%; background: #1b2433; }
+.panel-body { padding: 12px 14px 10px; gap: 12px; }
+.status-card { min-height: 40px; padding: 9px 12px; border-radius: 11px; background: #151d2b; box-shadow: 0 8px 20px rgba(0,0,0,.12); }
+.status-dot { width: 9px; height: 9px; }
+.status-dot.idle { background: #29c795; box-shadow: 0 0 8px rgba(41,199,149,.35); }
+.status-label { font-size: 11px; }
+.status-engine { display: flex; align-items: center; gap: 5px; max-width: 135px; overflow: hidden; padding: 5px 9px; color: #b9c4d7; border-radius: 999px; background: #202b40; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.engine-dot { width: 5px; height: 5px; flex: none; border-radius: 50%; background: #7b83ff; box-shadow: 0 0 7px rgba(123,131,255,.8); }
+.mic-section { gap: 9px; padding: 17px 14px 14px; border-color: rgba(104,124,171,.22); border-radius: 15px; background: linear-gradient(145deg,#1a2238 0%,#151d2d 58%,#111925 100%); box-shadow: 0 16px 35px rgba(0,0,0,.2); }
+.voice-kicker { position: relative; padding-left: 12px; color: #aab7d0; font-size: 10px; letter-spacing: .7px; }
+.voice-kicker::before { position: absolute; top: 2px; left: 0; width: 4px; height: 12px; border-radius: 4px; background: #716bff; content: ""; }
+.voice-toolbar-actions { gap: 5px; }
+.site-chat-button, .select-area-button { padding: 5px 8px; font-size: 9px; }
+.site-chat-button { color: #a3e8d0; }
+.mic-button { width: 80px; height: 80px; margin: 8px 0 1px; color: #64d7ff; border: 3px solid #4da8ff; background: #172035; box-shadow: inset 0 0 0 2px #172035, 0 0 0 3px rgba(91,91,255,.55), 0 0 22px rgba(58,127,255,.42); }
+.mic-button:hover { background: #1b2945; box-shadow: inset 0 0 0 2px #172035, 0 0 0 3px rgba(91,91,255,.7), 0 0 28px rgba(58,127,255,.55); }
+.mic-button svg { width: 29px; height: 29px; }
+.mic-button.recording { border-color: #ff6e8c; background: #3b2035; box-shadow: 0 0 0 3px rgba(255,89,139,.45), 0 0 25px rgba(255,89,139,.4); }
+.mic-prompt-title { margin-top: 2px; color: #e1e9f5; font-size: 11px; font-weight: 750; }
+.mic-help { max-width: 270px; color: #8997ad; font-size: 10px; }
+.quick-prompts { display: flex; flex-wrap: wrap; justify-content: center; gap: 5px; max-width: 285px; }
+.quick-prompts button { padding: 4px 8px; color: #c0cce0; border: 1px solid rgba(115,137,180,.2); border-radius: 999px; background: #202a3c; font-size: 9px; }
+.quick-prompts button:hover { color: #eef5ff; border-color: rgba(114,170,255,.48); background: #293751; }
+.transcript-card { margin-top: 4px; padding: 11px 12px; border-color: rgba(104,124,171,.24); border-radius: 10px; background: #101722; }
+.transcript-header { font-size: 9px; letter-spacing: .8px; }
+.transcript-text { min-height: 25px; color: #8f9db2; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; font-style: italic; }
+.input-text { min-height: 36px; padding: 8px 11px; border-color: rgba(104,124,171,.22); background: #111925; font-size: 11px; }
+.btn-primary { min-height: 36px; padding: 7px 14px; border-radius: 10px; background: linear-gradient(135deg,#6767f6,#4936dd); box-shadow: 0 6px 16px rgba(74,64,235,.25); font-size: 11px; }
+.send-row .btn-primary::after { content: "  →"; font-size: 14px; line-height: 0; }
+.step-log-section { gap: 8px; padding: 14px; border: 1px solid rgba(104,124,171,.2); border-radius: 15px; background: linear-gradient(145deg,#151d2d,#111925); }
+.steps-title { font-size: 13px; }
+.empty-steps { min-height: 108px; justify-content: center; gap: 9px; padding: 14px; border-color: rgba(104,124,171,.25); background: rgba(10,16,27,.28); text-align: center; }
+.empty-steps-icon { width: 27px; height: 27px; display: grid; place-items: center; color: #8394b1; border: 1px solid rgba(113,137,180,.25); border-radius: 50%; background: #1a2638; font-size: 15px; }
+.empty-steps div { display: flex; flex-direction: column; gap: 3px; }
+.empty-steps strong { color: #d8e2f1; font-size: 11px; font-weight: 650; }
+.empty-steps div span { color: #60718e; font-size: 9px; }
+.panel-footer { display: flex; align-items: center; justify-content: space-between; flex: none; padding: 4px 16px 10px; color: #61718a; font-size: 9px; }
+.footer-live-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #24c58d; box-shadow: 0 0 7px rgba(36,197,141,.6); }
+.feedback-link { color: #7786ff; text-decoration: underline; cursor: pointer; }

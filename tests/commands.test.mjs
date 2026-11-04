@@ -294,5 +294,5 @@ test("Safety Rule Verification: Sensitive Field Typing Blocked", () => {
 
   assert.equal(safetyResult.permitted, false, "Typing into password field must be prohibited");
   assert.match(safetyResult.reason, /Safety Block/);
-  assert.match(safetyResult.safetyAlertSpeech, /पासवर्ड|ओटीपी|संवेदनशील/);
+  assert.match(safetyResult.safetyAlertSpeech, /password|OTP|sensitive/i);
 });

@@ -169,7 +169,7 @@ export function inspectActionSafety(
         targetElement: target,
         reason: `Safety Block: Cannot type into sensitive field (${target.sensitiveReason || "Password/OTP/Card/Aadhaar"}).`,
         safetyAlertSpeech:
-          "यह पासवर्ड, ओटीपी या कार्ड फील्ड है। सुरक्षा के लिए कृपया इसे खुद भरें।",
+          "This is a password, OTP, or card field. For your security, please fill it manually.",
       };
     }
 
@@ -187,7 +187,7 @@ export function inspectActionSafety(
           requiresConfirmation: true,
           targetElement: target,
           reason: `Confirmation Required: Action '${target.label}' involves payment or form submission.`,
-          safetyAlertSpeech: `क्या आप '${target.label}' की पुष्टि करना चाहते हैं? कृपया 'हाँ' कहें या Yes दबाएँ।`,
+          safetyAlertSpeech: `Do you want to confirm '${target.label}'? Say yes or press Confirm.`,
         };
       }
     }
