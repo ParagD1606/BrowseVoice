@@ -31,7 +31,8 @@ BrowseVoice/
 │   ├── gnani.ts               # Gnani Prisma STT (WebSocket) & Timbre TTS client
 │   ├── planner.ts             # Swappable Planner Provider interface & implementations
 │   ├── schema.ts              # Strict JSON Schema validation for 7 planner actions
-│   └── safety.ts              # Mandatory safety checks, PII protection & stop rules
+│   ├── safety.ts              # Mandatory safety checks, PII protection & stop rules
+│   └── site-chat.ts           # Crawler/indexing job and vector-search chat client
 ├── mock-portal/               # BijliSeva Mock Electricity Bill Payment Portal
 │   ├── index.html             # Multi-step portal with dummy data & sensitive fields
 │   ├── styles.css             # Utility portal styling
@@ -83,6 +84,51 @@ Open [http://localhost:3000](http://localhost:3000) in your browser. The mock po
 * **Consumer Login**: Includes password and OTP input fields to verify sensitive field safety blocks.
 
 ---
+
+## 🌐 Chat with site
+
+The side panel's **Chat with site** button sends the current page URL to the included server-side knowledge service. The service crawls pages on the same origin, extracts and chunks content, generates embeddings, persists them in a vector index, and answers questions from the indexed content. Once indexing is ready, voice or typed questions in the panel are sent to the site's retrieval/chat endpoint.
+
+Configure the service in Settings or with these build-time variables:
+
+```env
+VITE_SITE_CHAT_ENDPOINT=https://your-knowledge-api.example.com
+VITE_SITE_CHAT_API_KEY=
+VITE_SITE_CHAT_MAX_PAGES=25
+```
+
+Start the included backend with:
+
+```bash
+npm run knowledge
+```
+
+The default backend uses a dependency-free local feature-hash embedding model and JSON vector store, so it works without credentials. For stronger semantic search and generated answers, set `SITE_CHAT_EMBEDDING_PROVIDER=openai-compatible` and/or `SITE_CHAT_LLM_PROVIDER=openai-compatible` or `gemini`, along with their environment-provided keys and model names. No keys are committed to the repository.
+
+For local mock-site development only, opt into crawling localhost:
+
+```env
+SITE_CHAT_ALLOW_PRIVATE_NETWORKS=true
+VITE_SITE_CHAT_ENDPOINT=http://127.0.0.1:8787
+```
+
+Keep `SITE_CHAT_ALLOW_PRIVATE_NETWORKS=false` outside local development to prevent the crawler from reaching private network targets. The endpoint implements:
+
+```text
+POST /sites/index
+body: { "url": "https://example.com/docs", "scope": "origin", "maxPages": 25 }
+response: { "jobId": "job_123", "status": "queued" }
+
+GET /sites/index/:jobId
+response: { "jobId": "job_123", "siteId": "site_456", "status": "crawling", "pagesIndexed": 8, "totalPages": 25 }
+response when ready: { "jobId": "job_123", "siteId": "site_456", "status": "ready" }
+
+POST /sites/chat
+body: { "siteId": "site_456", "question": "What does this site offer?", "history": [] }
+response: { "answer": "...", "sources": [{ "title": "...", "url": "...", "snippet": "..." }] }
+```
+
+Indexing is scoped to the current page's origin and capped by the configured page limit. The extension never stores the site's crawled content or embeddings locally; those remain in the knowledge service/vector store.
 
 ## 🎙️ Gnani AI Integration Details
 

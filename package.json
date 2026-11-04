@@ -6,8 +6,9 @@
   "scripts": {
     "build": "vite build && vite build --config vite.content.config.ts",
     "dev": "vite",
-    "test": "node --experimental-strip-types tests/commands.test.mjs",
-    "portal": "node mock-portal/server.mjs"
+    "test": "node --experimental-strip-types --test tests/commands.test.mjs tests/site-knowledge.test.mjs",
+    "portal": "node mock-portal/server.mjs",
+    "knowledge": "node backend/server.mjs"
   },
   "repository": {
     "type": "git",

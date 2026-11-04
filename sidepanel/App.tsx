@@ -35,6 +35,14 @@ import {
 } from "../lib/safety";
 import { validatePlannerAction, type PlannerAction } from "../lib/schema";
 import { MicrophoneSession } from "./mic";
+import {
+  askSiteQuestion,
+  getSiteIndexProgress,
+  startSiteIndexing,
+  type SiteChatHistoryEntry,
+  type SiteIndexProgress,
+  type SiteIndexStatus,
+} from "../lib/site-chat";
 
 type AgentStatus =
   | "idle"
@@ -53,6 +61,9 @@ interface SettingsState {
   llmApiKey: string;
   llmEndpoint: string;
   llmModel: string;
+  siteChatEndpoint: string;
+  siteChatApiKey: string;
+  siteChatMaxPages: number;
 }
 
 interface FormFieldDescriptor {
@@ -173,12 +184,25 @@ const DEFAULT_SETTINGS: SettingsState = {
     "",
   llmEndpoint: (import.meta.env.VITE_LLM_ENDPOINT as string) || "https://api.openai.com/v1",
   llmModel: (import.meta.env.VITE_LLM_MODEL as string) || DEFAULT_GEMINI_MODEL,
+  siteChatEndpoint: (import.meta.env.VITE_SITE_CHAT_ENDPOINT as string) || "",
+  siteChatApiKey: (import.meta.env.VITE_SITE_CHAT_API_KEY as string) || "",
+  siteChatMaxPages: Number(import.meta.env.VITE_SITE_CHAT_MAX_PAGES || 25),
 };
 
 interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
+}
+
+interface SiteChatState {
+  status: SiteIndexStatus | "idle";
+  startUrl: string;
+  siteId: string;
+  jobId: string;
+  pagesIndexed: number;
+  totalPages?: number;
+  message: string;
 }
 
 function isSelectionCommand(text: string): boolean {
@@ -231,6 +255,15 @@ export const App: React.FC = () => {
   const [confirmationMessage, setConfirmationMessage] = useState<string>("");
   const [snips, setSnips] = useState<SnipContext[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [siteChatMessages, setSiteChatMessages] = useState<ChatMessage[]>([]);
+  const [siteChat, setSiteChat] = useState<SiteChatState>({
+    status: "idle",
+    startUrl: "",
+    siteId: "",
+    jobId: "",
+    pagesIndexed: 0,
+    message: "",
+  });
 
   // Settings modal
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
@@ -250,7 +283,21 @@ export const App: React.FC = () => {
   const voiceListenGenerationRef = useRef(0);
   const voiceTurnHandlerRef = useRef<(text: string) => Promise<void>>(async () => {});
   const startVoiceListeningRef = useRef<() => Promise<void>>(async () => {});
+  const siteIndexPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const siteChatRef = useRef<SiteChatState>(siteChat);
+  const siteChatRunRef = useRef(0);
+  const siteChatTabRef = useRef<number | null>(null);
   stepsRef.current = steps;
+  siteChatRef.current = siteChat;
+
+  const resetSiteChatSession = () => {
+    if (siteIndexPollRef.current) clearTimeout(siteIndexPollRef.current);
+    siteIndexPollRef.current = null;
+    siteChatRunRef.current += 1;
+    siteChatTabRef.current = null;
+    setSiteChat({ status: "idle", startUrl: "", siteId: "", jobId: "", pagesIndexed: 0, message: "" });
+    setSiteChatMessages([]);
+  };
 
   // Load saved settings from chrome.storage.local
   useEffect(() => {
@@ -282,6 +329,9 @@ export const App: React.FC = () => {
 
     // Listen for tab activation changes
     const onTabActivated = (activeInfo: chrome.tabs.TabActiveInfo) => {
+      if (siteChatRef.current.status !== "idle" && siteChatTabRef.current !== null && siteChatTabRef.current !== activeInfo.tabId) {
+        resetSiteChatSession();
+      }
       setActiveTabId(activeInfo.tabId);
       chrome.tabs.get(activeInfo.tabId, (t) => {
         if (t?.title) setActiveTabTitle(t.title);
@@ -292,6 +342,9 @@ export const App: React.FC = () => {
     // Also update URL when tab updates (e.g. navigation within same tab)
     const onTabUpdated = (tabId: number, _info: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
       if (tab.active) {
+        if (siteChatRef.current.status !== "idle" && siteChatTabRef.current === tabId && tab.url && tab.url !== siteChatRef.current.startUrl) {
+          resetSiteChatSession();
+        }
         setActiveTabId(tabId);
         setActiveTabTitle(tab.title || "Web Page");
         setActiveTabUrl(tab.url || "");
@@ -321,6 +374,12 @@ export const App: React.FC = () => {
     micSessionRef.current.stop();
     gnaniWsRef.current?.disconnect();
     stopAllSpeech();
+    siteChatRunRef.current += 1;
+    siteChatTabRef.current = null;
+    if (siteIndexPollRef.current) {
+      clearTimeout(siteIndexPollRef.current);
+      siteIndexPollRef.current = null;
+    }
     voiceSessionActiveRef.current = false;
     setVoiceSessionActive(false);
     voiceListenGenerationRef.current += 1;
@@ -494,6 +553,10 @@ export const App: React.FC = () => {
 
   const handleUserRequest = async (text: string) => {
     if (formFillRef.current && await submitFormFieldAnswer(text)) return;
+    if (siteChatRef.current.status === "ready" && siteChatRef.current.siteId) {
+      await answerFromSite(text);
+      return;
+    }
     await runAgentLoop(text);
   };
 
@@ -504,6 +567,7 @@ export const App: React.FC = () => {
   const isRestrictedPage = (url: string | undefined): boolean => {
     if (!url) return true;
     return (
+      !/^https?:\/\//i.test(url) ||
       url.startsWith("chrome://") ||
       url.startsWith("chrome-extension://") ||
       url.startsWith("about:") ||
@@ -638,6 +702,150 @@ export const App: React.FC = () => {
         setStatus("idle");
         setStatusText("Ready / तैयार");
       }
+    }
+  };
+
+  const siteChatConfig = () => ({
+    endpoint: settings.siteChatEndpoint,
+    apiKey: settings.siteChatApiKey,
+    maxPages: settings.siteChatMaxPages,
+  });
+
+  const updateSiteIndexProgress = (progress: SiteIndexProgress) => {
+    setSiteChat((previous) => ({
+      ...previous,
+      status: progress.status,
+      siteId: progress.siteId || previous.siteId,
+      jobId: progress.jobId || previous.jobId,
+      pagesIndexed: progress.pagesIndexed ?? previous.pagesIndexed,
+      totalPages: progress.totalPages ?? previous.totalPages,
+      message: progress.error || progress.message || previous.message,
+    }));
+  };
+
+  const pollSiteIndex = async (jobId: string, knownSiteId = "", runId = siteChatRunRef.current): Promise<void> => {
+    if (runId !== siteChatRunRef.current) return;
+    try {
+      const progress = await getSiteIndexProgress(siteChatConfig(), jobId);
+      if (runId !== siteChatRunRef.current) return;
+      updateSiteIndexProgress(progress);
+
+      if (progress.status === "ready") {
+        if (!progress.siteId && !knownSiteId && !siteChatRef.current.siteId) {
+          setSiteChat((previous) => ({ ...previous, status: "failed", message: "Indexing finished without a site ID." }));
+          setStatus("idle");
+          setStatusText("Site index is incomplete");
+          return;
+        }
+        setStatus("idle");
+        setStatusText("Site ready / साइट तैयार है");
+        return;
+      }
+      if (progress.status === "failed") {
+        setStatus("idle");
+        setStatusText(progress.error || progress.message || "Site indexing failed");
+        return;
+      }
+
+      setStatus("executing");
+      setStatusText(`Indexing site... ${progress.pagesIndexed || 0}${progress.totalPages ? `/${progress.totalPages}` : ""} pages`);
+      siteIndexPollRef.current = setTimeout(() => {
+        void pollSiteIndex(jobId, knownSiteId || progress.siteId || siteChatRef.current.siteId, runId);
+      }, 1200);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not check site indexing progress.";
+      setSiteChat((previous) => ({ ...previous, status: "failed", message }));
+      setStatus("idle");
+      setStatusText("Site indexing failed");
+    }
+  };
+
+  const startSiteChat = async () => {
+    if (!activeTabUrl || isRestrictedPage(activeTabUrl)) {
+      setStatus("idle");
+      setStatusText("Open a normal website first");
+      return;
+    }
+    if (!settings.siteChatEndpoint.trim()) {
+      setStatus("idle");
+      setStatusText("Add the Site knowledge API endpoint in Settings");
+      setSettingsOpen(true);
+      return;
+    }
+    if (siteChatRef.current.status === "queued" || siteChatRef.current.status === "crawling" || siteChatRef.current.status === "processing") return;
+
+    if (siteIndexPollRef.current) clearTimeout(siteIndexPollRef.current);
+    const runId = ++siteChatRunRef.current;
+    siteChatTabRef.current = activeTabId;
+    setSnips([]);
+    setSiteChatMessages([]);
+    setSiteChat({
+      status: "queued",
+      startUrl: activeTabUrl,
+      siteId: "",
+      jobId: "",
+      pagesIndexed: 0,
+      message: "Starting crawler...",
+    });
+    setStatus("executing");
+    setStatusText("Starting site crawler / साइट पढ़ना शुरू...");
+
+    try {
+      const started = await startSiteIndexing(siteChatConfig(), activeTabUrl);
+      setSiteChat((previous) => ({
+        ...previous,
+        status: started.status,
+        siteId: started.siteId || "",
+        jobId: started.jobId,
+        pagesIndexed: started.pagesIndexed || 0,
+        totalPages: started.totalPages,
+        message: started.message || "Crawler is building the site knowledge base.",
+      }));
+      if (started.status === "ready" && started.siteId) {
+        setStatus("idle");
+        setStatusText("Site ready / साइट तैयार है");
+      } else {
+        await pollSiteIndex(started.jobId, started.siteId || "", runId);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not start site indexing.";
+      setSiteChat((previous) => ({ ...previous, status: "failed", message }));
+      setStatus("idle");
+      setStatusText("Could not start site chat");
+    }
+  };
+
+  const clearSiteChat = () => {
+    resetSiteChatSession();
+    setStatusText("Ready / तैयार");
+  };
+
+  const answerFromSite = async (question: string) => {
+    const currentSite = siteChatRef.current;
+    if (currentSite.status !== "ready" || !currentSite.siteId) return;
+    const userMessage: ChatMessage = { id: `site-user-${Date.now()}`, role: "user", text: question };
+    const history: SiteChatHistoryEntry[] = siteChatMessages.slice(-8).map((message) => ({
+      role: message.role,
+      content: message.text,
+    }));
+    setSiteChatMessages((previous) => [...previous, userMessage]);
+    setStatus("thinking");
+    setStatusText("Searching site knowledge / साइट की जानकारी खोज रहे हैं...");
+    try {
+      const response = await askSiteQuestion(siteChatConfig(), currentSite.siteId, question, history);
+      const sourceText = response.sources?.length
+        ? `\n\nSources: ${response.sources.slice(0, 3).map((source) => source.title || source.url).filter(Boolean).join(" • ")}`
+        : "";
+      const answer = `${response.answer}${sourceText}`;
+      setSiteChatMessages((previous) => [...previous, { id: `site-assistant-${Date.now()}`, role: "assistant", text: answer }]);
+      setStatus("idle");
+      setStatusText("Answer ready / जवाब तैयार");
+      await speakStatus(response.answer.slice(0, 500));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not answer from this site.";
+      setSiteChatMessages((previous) => [...previous, { id: `site-assistant-${Date.now()}`, role: "assistant", text: message }]);
+      setStatus("idle");
+      setStatusText("Could not answer / जवाब नहीं मिल सका");
     }
   };
 
@@ -979,7 +1187,8 @@ export const App: React.FC = () => {
     const generation = ++voiceListenGenerationRef.current;
     setShowMicPermissionHelp(false);
     setTranscript("");
-    setStatusText("Listening / सुन रहे हैं... ('रुको' कहने पर सत्र बंद होगा)");
+    setStatus("listening");
+    setStatusText("Listening / सुन रहे हैं... ('रुको' कहने पर रुक जाएगा)");
 
     try {
       if (settings.gnaniApiKey) {
@@ -1012,105 +1221,20 @@ export const App: React.FC = () => {
         },
         settings.languageCode,
       );
-
-      if (generation !== voiceListenGenerationRef.current || !voiceSessionActiveRef.current) {
-        micSessionRef.current.stop();
-        gnaniWsRef.current?.disconnect();
-        return;
-      }
-      setStatus("listening");
-      setStatusText("Listening / सुन रहे हैं... ('रुको' कहने पर सत्र बंद होगा)");
-    } catch (err) {
+    } catch (error) {
       voiceSessionActiveRef.current = false;
       setVoiceSessionActive(false);
       micSessionRef.current.stop();
       gnaniWsRef.current?.disconnect();
       setStatus("idle");
-      setStatusText("Ready / तैयार");
-
-      // If transcript was captured, kick off the loop
-      if (transcript.trim()) {
-        const text = transcript.trim();
-        // Check for stop word
-        if (isStopCommand(text)) {
-          handleEmergencyStop();
-          return;
-        }
-        if (isSelectionCommand(text)) {
-          await selectArea();
-          return;
-        }
-        // Check for confirmation
-        if (pendingConfirmationAction && isConfirmationCommand(text)) {
-          await confirmAndResumeAction();
-          return;
-        }
-        await handleUserRequest(text);
-      }
-    } else {
-      // Start recording
-      setShowMicPermissionHelp(false);
-      setTranscript("");
-      setStatus("listening");
-      setStatusText("Listening / सुन रहे हैं... ('रुको' कहने पर रुक जाएगा)");
-
-      try {
-        // 1. If Gnani API key configured, connect Gnani Prisma WebSocket
-        if (settings.gnaniApiKey) {
-          gnaniWsRef.current = new GnaniPrismaWebSocketClient(
-            {
-              apiKey: settings.gnaniApiKey,
-              languageCode: settings.languageCode,
-              sttModel: "prisma-v3.0",
-            },
-            (text) => {
-              setTranscript(text);
-              if (isStopCommand(text)) {
-                handleEmergencyStop();
-              }
-            },
-            (err) => console.warn("Prisma WS error:", err)
-          );
-          await gnaniWsRef.current.connect().catch((e) => console.warn("Prisma connect fallback:", e));
-        }
-
-        // 2. Start microphone audio capture in side panel
-        await micSessionRef.current.start(
-          (pcmChunk) => {
-            gnaniWsRef.current?.sendAudioChunk(pcmChunk);
-          },
-          (text, isFinal) => {
-            setTranscript(text);
-            if (isStopCommand(text)) {
-              handleEmergencyStop();
-              return;
-            }
-            if (isFinal) {
-              // End of utterance detected
-              micSessionRef.current.stop();
-              gnaniWsRef.current?.disconnect();
-              if (isSelectionCommand(text)) {
-                selectArea();
-              } else if (pendingConfirmationAction && isConfirmationCommand(text)) {
-                confirmAndResumeAction();
-              } else {
-                handleUserRequest(text);
-              }
-            }
-          },
-          settings.languageCode
-        );
-      } catch (err) {
-        setStatus("idle");
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        const errorName = err instanceof DOMException ? err.name : "";
-        if (errorName === "NotAllowedError" || errorMessage.includes("Permission dismissed")) {
-          setStatusText("Approve microphone access in the new tab");
-          setShowMicPermissionHelp(true);
-        } else {
-          setStatusText("Microphone access error");
-          alert(`Microphone error: ${errorMessage}`);
-        }
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorName = error instanceof DOMException ? error.name : "";
+      if (errorName === "NotAllowedError" || errorMessage.includes("Permission dismissed")) {
+        setStatusText("Approve microphone access in the new tab");
+        setShowMicPermissionHelp(true);
+      } else {
+        setStatusText("Microphone access error");
+        alert(`Microphone error: ${errorMessage}`);
       }
     }
   };
@@ -1273,10 +1397,22 @@ export const App: React.FC = () => {
         <section className="mic-section" aria-label="Voice controls">
           <div className="voice-toolbar">
             <div className="voice-kicker">VOICE CONTROL</div>
-            <button className="select-area-button" type="button" onClick={selectArea}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 8h8v8H8z"/></svg>
-              Select area
-            </button>
+            <div className="voice-toolbar-actions">
+              <button className="select-area-button" type="button" onClick={selectArea}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 8h8v8H8z"/></svg>
+                Select area
+              </button>
+              <button
+                className="site-chat-button"
+                type="button"
+                onClick={() => void startSiteChat()}
+                disabled={siteChat.status === "queued" || siteChat.status === "crawling" || siteChat.status === "processing"}
+                title="Crawl this website and chat with its indexed knowledge"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2 2.2 3 4.9 3 8s-1 5.8-3 8c-2-2.2-3-4.9-3-8s1-5.8 3-8Z"/></svg>
+                {siteChat.status === "queued" || siteChat.status === "crawling" || siteChat.status === "processing" ? "Indexing…" : "Chat with site"}
+              </button>
+            </div>
           </div>
           <button
             className={`mic-button ${voiceSessionActive ? "recording" : ""}`}
@@ -1341,11 +1477,44 @@ export const App: React.FC = () => {
             </div>
           )}
 
+          {siteChat.status !== "idle" && (
+            <div className={`site-chat-card ${siteChat.status}`} aria-label="Site chat status">
+              <div className="site-chat-card-header">
+                <div>
+                  <div className="site-chat-kicker">SITE KNOWLEDGE</div>
+                  <strong>{siteChat.startUrl ? new URL(siteChat.startUrl).hostname : "Current website"}</strong>
+                </div>
+                <button type="button" className="site-chat-clear" onClick={clearSiteChat}>Clear</button>
+              </div>
+              <div className="site-chat-progress">
+                <span className="site-chat-dot" />
+                <span>
+                  {siteChat.status === "ready"
+                    ? "Indexed and ready for questions"
+                    : siteChat.status === "failed"
+                      ? siteChat.message || "Indexing failed"
+                      : `${siteChat.message || "Crawler is working"}${siteChat.pagesIndexed > 0 ? ` · ${siteChat.pagesIndexed}${siteChat.totalPages ? `/${siteChat.totalPages}` : ""} pages` : ""}`}
+                </span>
+              </div>
+            </div>
+          )}
+
           {chatMessages.length > 0 && (
             <div className="chat-thread" aria-label="Snip conversation">
               {chatMessages.map((message) => (
                 <div className={`chat-message ${message.role}`} key={message.id}>
                   <span className="chat-role">{message.role === "user" ? "You" : "Browse Voice"}</span>
+                  <p>{message.text}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {siteChatMessages.length > 0 && (
+            <div className="chat-thread site-chat-thread" aria-label="Site conversation">
+              {siteChatMessages.map((message) => (
+                <div className={`chat-message ${message.role}`} key={message.id}>
+                  <span className="chat-role">{message.role === "user" ? "You" : "Site knowledge"}</span>
                   <p>{message.text}</p>
                 </div>
               ))}
@@ -1534,6 +1703,44 @@ export const App: React.FC = () => {
                 </div>
               </>
             )}
+
+            <div className="settings-divider" />
+            <div className="form-group">
+              <label className="form-label">Site knowledge API endpoint</label>
+              <input
+                type="url"
+                className="form-input"
+                placeholder="https://your-api.example.com"
+                value={settings.siteChatEndpoint}
+                onChange={(e) => setSettings({ ...settings, siteChatEndpoint: e.target.value })}
+              />
+              <span className="form-help">
+                The service crawls the current site, creates embeddings, stores them in your vector store, and answers site questions.
+              </span>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Site knowledge API key (optional)</label>
+              <input
+                type="password"
+                className="form-input"
+                placeholder="Service API key"
+                value={settings.siteChatApiKey}
+                onChange={(e) => setSettings({ ...settings, siteChatApiKey: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Maximum pages per site</label>
+              <input
+                type="number"
+                className="form-input"
+                min={1}
+                max={250}
+                value={settings.siteChatMaxPages}
+                onChange={(e) => setSettings({ ...settings, siteChatMaxPages: Math.min(250, Math.max(1, Number(e.target.value) || 1)) })}
+              />
+            </div>
 
             <button
               className="btn-primary"

@@ -5,6 +5,8 @@ dist/
 *.log
 *.md
 !README.md
+.backend-data/
+backend/data/
 .env
 .env.local
 .env.*.local
