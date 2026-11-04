@@ -54,6 +54,7 @@ export function createConfig(overrides = {}) {
     llmApiKey: process.env.SITE_CHAT_LLM_API_KEY || process.env.LLM_API_KEY || "",
     llmModel: process.env.SITE_CHAT_LLM_MODEL || process.env.LLM_MODEL || "",
     serverApiKey: process.env.SITE_CHAT_API_KEY || "",
+    googleSafeBrowsingKey: process.env.SITE_SAFETY_GOOGLE_SAFE_BROWSING_KEY || "",
     corsOrigins: listEnv("SITE_CHAT_CORS_ORIGINS", ["*"]),
     userAgent: process.env.SITE_CHAT_USER_AGENT || "BrowseVoiceKnowledgeCrawler/1.0",
     ...overrides,

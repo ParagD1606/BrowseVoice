@@ -126,9 +126,15 @@ response when ready: { "jobId": "job_123", "siteId": "site_456", "status": "read
 POST /sites/chat
 body: { "siteId": "site_456", "question": "What does this site offer?", "history": [] }
 response: { "answer": "...", "sources": [{ "title": "...", "url": "...", "snippet": "..." }] }
+
+POST /sites/safety
+body: { "url": "https://example.com" }
+response: { "verdict": "low-risk", "score": 8, "summary": "...", "reasons": [], "checks": [] }
 ```
 
 Indexing is scoped to the current page's origin and capped by the configured page limit. The extension never stores the site's crawled content or embeddings locally; those remain in the knowledge service/vector store.
+
+The **Check site** button performs a server-side risk assessment before the user relies on a site. It checks HTTPS, redirects, hostname patterns, IP/punycode domains, response status, common browser security headers, and password forms after cross-domain redirects. If `SITE_SAFETY_GOOGLE_SAFE_BROWSING_KEY` is configured, it also checks Google's Safe Browsing reputation API. The result is a risk assessment with reasons, not a definitive guarantee that a site is fake or legitimate.
 
 ## 🎙️ Gnani AI Integration Details
 

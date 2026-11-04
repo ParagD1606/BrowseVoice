@@ -365,6 +365,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .site-chat-button:hover:not(:disabled) { border-color: rgba(82,209,164,.5); background: rgba(82,209,164,.16); }
 .site-chat-button:disabled { cursor: wait; opacity: .7; }
 .site-chat-button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.site-safety-button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; color: #f0cc8b; border: 1px solid rgba(240,189,114,.28); border-radius: 8px; background: rgba(181,120,43,.1); font-size: 10px; font-weight: 750; }
+.site-safety-button:hover:not(:disabled) { border-color: rgba(240,189,114,.55); background: rgba(181,120,43,.18); }
+.site-safety-button:disabled { cursor: wait; opacity: .7; }
+.site-safety-button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .mic-button { width: 62px; height: 62px; display: grid; place-items: center; border: 0; border-radius: 50%; color: #b4d4ff; background: #29425f; box-shadow: inset 0 0 0 1px rgba(171,208,255,.14), 0 8px 20px rgba(0,0,0,.24); transition: background .16s ease, transform .12s ease, box-shadow .2s ease; }
 .mic-button:hover { background: #355675; transform: translateY(-1px); }
 .mic-button svg { width: 26px; height: 26px; stroke-width: 1.8; }
@@ -404,6 +408,26 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .site-chat-dot { width: 7px; height: 7px; flex: none; margin-top: 4px; border-radius: 50%; background: var(--green); }
 .site-chat-card.queued .site-chat-dot, .site-chat-card.crawling .site-chat-dot, .site-chat-card.processing .site-chat-dot { animation: bvPulse 1.2s infinite; }
 .site-chat-card.failed .site-chat-dot { background: var(--red); }
+.site-safety-card { width: 100%; padding: 10px 11px; border: 1px solid rgba(114,170,255,.25); border-radius: var(--r-sm); background: rgba(114,170,255,.07); text-align: left; }
+.site-safety-card.low-risk { border-color: rgba(82,209,164,.3); background: rgba(82,209,164,.07); }
+.site-safety-card.caution { border-color: rgba(240,189,114,.32); background: rgba(181,120,43,.09); }
+.site-safety-card.high-risk { border-color: rgba(255,135,148,.34); background: rgba(153,47,66,.12); }
+.site-safety-card.unknown { border-color: rgba(160,175,198,.28); background: rgba(120,135,160,.08); }
+.site-safety-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.site-safety-card-header strong { display: block; color: #e8edf4; font-size: 12px; }
+.site-safety-score { padding: 3px 6px; color: #c8d5e6; border: 1px solid rgba(160,175,198,.24); border-radius: 6px; background: rgba(8,13,22,.22); font-size: 10px; font-variant-numeric: tabular-nums; }
+.site-safety-summary { margin: 7px 0 0; color: #c9d5e3; font-size: 11px; line-height: 1.45; }
+.site-safety-reasons { display: flex; flex-direction: column; gap: 7px; margin-top: 9px; }
+.site-safety-reason { display: flex; align-items: flex-start; gap: 7px; }
+.site-safety-reason > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.site-safety-reason strong { color: #e1e8f1; font-size: 10px; line-height: 1.3; }
+.site-safety-reason span:not(.safety-severity) { color: #aebdce; font-size: 10px; line-height: 1.35; }
+.safety-severity { width: 6px; height: 6px; flex: none; margin-top: 4px; border-radius: 50%; background: #91a4bb; }
+.safety-severity.high { background: var(--red); box-shadow: 0 0 6px rgba(255,111,137,.45); }
+.safety-severity.medium { background: var(--amber); }
+.safety-severity.low { background: var(--blue); }
+.safety-severity.info { background: #91a4bb; }
+.site-safety-disclaimer { margin-top: 9px; padding-top: 7px; color: #8191a7; border-top: 1px solid rgba(160,175,198,.14); font-size: 9px; line-height: 1.4; }
 .site-chat-thread { max-height: 280px; }
 .chat-thread { width: 100%; display: flex; flex-direction: column; gap: 7px; max-height: 220px; overflow-y: auto; text-align: left; }
 .chat-message { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); }

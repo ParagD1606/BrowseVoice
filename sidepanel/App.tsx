@@ -43,6 +43,7 @@ import {
   type SiteIndexProgress,
   type SiteIndexStatus,
 } from "../lib/site-chat";
+import { requestSiteSafety, type SiteSafetyResult } from "../lib/site-safety";
 
 type AgentStatus =
   | "idle"
@@ -262,6 +263,16 @@ Object.assign(UI_TRANSLATIONS, {
   "Waiting for confirmation": { "hi-IN": "पुष्टि की प्रतीक्षा है", "ta-IN": "உறுதிப்படுத்தலுக்காக காத்திருக்கிறது", "te-IN": "నిర్ధారణ కోసం వేచి ఉంది", "kn-IN": "ದೃಢೀಕರಣಕ್ಕಾಗಿ ಕಾಯುತ್ತಿದೆ", "mr-IN": "पुष्टीची प्रतीक्षा आहे", "gu-IN": "પુષ્ટિની રાહ જોઈ રહ્યા છીએ", "bn-IN": "নিশ্চিতকরণের অপেক্ষায়", "pa-IN": "ਪੁਸ਼ਟੀ ਦੀ ਉਡੀਕ ਹੈ", "ml-IN": "സ്ഥിരീകരണത്തിനായി കാത്തിരിക്കുന്നു" },
   "Awaiting response": { "hi-IN": "जवाब की प्रतीक्षा है", "ta-IN": "பதிலுக்காக காத்திருக்கிறது", "te-IN": "సమాధానం కోసం వేచి ఉంది", "kn-IN": "ಪ್ರತಿಕ್ರಿಯೆಗಾಗಿ ಕಾಯುತ್ತಿದೆ", "mr-IN": "उत्तराची प्रतीक्षा आहे", "gu-IN": "જવાબની રાહ જોઈ રહ્યા છીએ", "bn-IN": "উত্তরের অপেক্ষায়", "pa-IN": "ਜਵਾਬ ਦੀ ਉਡੀਕ ਹੈ", "ml-IN": "പ്രതികരണത്തിനായി കാത്തിരിക്കുന്നു" },
   "Microphone access error": { "hi-IN": "माइक की अनुमति में त्रुटि", "ta-IN": "மைக்ரோஃபோன் அணுகல் பிழை", "te-IN": "మైక్రోఫోన్ యాక్సెస్ లోపం", "kn-IN": "ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶ ದೋಷ", "mr-IN": "मायक्रोफोन प्रवेश त्रुटी", "gu-IN": "માઇક્રોફોન ઍક્સેસ ભૂલ", "bn-IN": "মাইক্রোফোন অ্যাক্সেস ত্রুটি", "pa-IN": "ਮਾਈਕ੍ਰੋਫੋਨ ਪਹੁੰਚ ਗਲਤੀ", "ml-IN": "മൈക്രോഫോൺ ആക്സസ് പിശക്" },
+  "Check site": { "hi-IN": "साइट जांचें", "ta-IN": "தளத்தைச் சரிபார்க்கவும்", "te-IN": "సైట్‌ను తనిఖీ చేయండి", "kn-IN": "ಸೈಟ್ ಪರಿಶೀಲಿಸಿ", "mr-IN": "साइट तपासा", "gu-IN": "સાઇટ તપાસો", "bn-IN": "সাইট পরীক্ষা করুন", "pa-IN": "ਸਾਈਟ ਜਾਂਚੋ", "ml-IN": "സൈറ്റ് പരിശോധിക്കുക" },
+  "Checking…": { "hi-IN": "जांच हो रही है…", "ta-IN": "சரிபார்க்கிறது…", "te-IN": "తనిఖీ చేస్తోంది…", "kn-IN": "ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ…", "mr-IN": "तपासत आहे…", "gu-IN": "તપાસી રહ્યું છે…", "bn-IN": "পরীক্ষা করা হচ্ছে…", "pa-IN": "ਜਾਂਚ ਹੋ ਰਹੀ ਹੈ…", "ml-IN": "പരിശോധിക്കുന്നു…" },
+  "Safety check complete": { "hi-IN": "सुरक्षा जांच पूरी हुई", "ta-IN": "பாதுகாப்புச் சரிபார்ப்பு முடிந்தது", "te-IN": "భద్రతా తనిఖీ పూర్తయింది", "kn-IN": "ಸುರಕ್ಷತಾ ಪರಿಶೀಲನೆ ಪೂರ್ಣಗೊಂಡಿದೆ", "mr-IN": "सुरक्षा तपासणी पूर्ण झाली", "gu-IN": "સુરક્ષા તપાસ પૂર્ણ થઈ", "bn-IN": "নিরাপত্তা পরীক্ষা সম্পন্ন হয়েছে", "pa-IN": "ਸੁਰੱਖਿਆ ਜਾਂਚ ਪੂਰੀ ਹੋਈ", "ml-IN": "സുരക്ഷാ പരിശോധന പൂർത്തിയായി" },
+  "Checking site safety...": { "hi-IN": "साइट सुरक्षा जांच रहे हैं...", "ta-IN": "தளப் பாதுகாப்பைச் சரிபார்க்கிறது...", "te-IN": "సైట్ భద్రతను తనిఖీ చేస్తోంది...", "kn-IN": "ಸೈಟ್ ಸುರಕ್ಷತೆಯನ್ನು ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ...", "mr-IN": "साइट सुरक्षेची तपासणी करत आहे...", "gu-IN": "સાઇટ સુરક્ષા તપાસી રહ્યા છીએ...", "bn-IN": "সাইটের নিরাপত্তা পরীক্ষা করা হচ্ছে...", "pa-IN": "ਸਾਈਟ ਦੀ ਸੁਰੱਖਿਆ ਜਾਂਚ ਰਹੇ ਹਾਂ...", "ml-IN": "സൈറ്റ് സുരക്ഷ പരിശോധിക്കുന്നു..." },
+  "SITE SAFETY": { "hi-IN": "साइट सुरक्षा", "ta-IN": "தளப் பாதுகாப்பு", "te-IN": "సైట్ భద్రత", "kn-IN": "ಸೈಟ್ ಸುರಕ್ಷತೆ", "mr-IN": "साइट सुरक्षा", "gu-IN": "સાઇટ સુરક્ષા", "bn-IN": "সাইট নিরাপত্তা", "pa-IN": "ਸਾਈਟ ਸੁਰੱਖਿਆ", "ml-IN": "സൈറ്റ് സുരക്ഷ" },
+  "Low risk": { "hi-IN": "कम जोखिम", "ta-IN": "குறைந்த ஆபத்து", "te-IN": "తక్కువ ప్రమాదం", "kn-IN": "ಕಡಿಮೆ ಅಪಾಯ", "mr-IN": "कमी जोखीम", "gu-IN": "ઓછું જોખમ", "bn-IN": "কম ঝুঁকি", "pa-IN": "ਘੱਟ ਜੋਖਮ", "ml-IN": "കുറഞ്ഞ അപകടസാധ്യത" },
+  "Use caution": { "hi-IN": "सावधानी बरतें", "ta-IN": "எச்சரிக்கையாக இருங்கள்", "te-IN": "జాగ్రత్తగా ఉండండి", "kn-IN": "ಎಚ್ಚರಿಕೆಯಿಂದಿರಿ", "mr-IN": "सावधगिरी बाळगा", "gu-IN": "સાવચેત રહો", "bn-IN": "সতর্ক থাকুন", "pa-IN": "ਸਾਵਧਾਨੀ ਵਰਤੋ", "ml-IN": "ജാഗ്രത പാലിക്കുക" },
+  "High risk": { "hi-IN": "उच्च जोखिम", "ta-IN": "அதிக ஆபத்து", "te-IN": "అధిక ప్రమాదం", "kn-IN": "ಹೆಚ್ಚಿನ ಅಪಾಯ", "mr-IN": "उच्च जोखीम", "gu-IN": "ઉચ્ચ જોખમ", "bn-IN": "উচ্চ ঝুঁকি", "pa-IN": "ਉੱਚ ਜੋਖਮ", "ml-IN": "ഉയർന്ന അപകടസാധ്യത" },
+  Unknown: { "hi-IN": "अज्ञात", "ta-IN": "தெரியவில்லை", "te-IN": "తెలియదు", "kn-IN": "ತಿಳಿದಿಲ್ಲ", "mr-IN": "अज्ञात", "gu-IN": "અજ્ઞાત", "bn-IN": "অজানা", "pa-IN": "ਅਣਜਾਣ", "ml-IN": "അജ്ഞാതം" },
+  "This is a risk assessment, not proof that a site is fake or legitimate.": { "hi-IN": "यह जोखिम आकलन है; इससे साइट के नकली या वैध होने का पक्का प्रमाण नहीं मिलता।", "ta-IN": "இது ஒரு ஆபத்து மதிப்பீடு மட்டுமே; தளம் போலியானது அல்லது உண்மையானது என்பதற்கான உறுதியான ஆதாரம் அல்ல.", "te-IN": "ఇది ప్రమాద అంచనా మాత్రమే; సైట్ నకిలీ లేదా నిజమైనదని నిరూపించదు.", "kn-IN": "ಇದು ಅಪಾಯದ ಮೌಲ್ಯಮಾಪನ ಮಾತ್ರ; ಸೈಟ್ ನಕಲಿ ಅಥವಾ ನಿಜವೆಂಬುದಕ್ಕೆ ಇದು ಪುರಾವೆಯಲ್ಲ.", "mr-IN": "हे जोखीम मूल्यांकन आहे; साइट बनावट किंवा वैध असल्याचा हा पुरावा नाही.", "gu-IN": "આ જોખમનું મૂલ્યાંકન છે; સાઇટ નકલી કે વિશ્વસનીય હોવાનો આ પુરાવો નથી.", "bn-IN": "এটি একটি ঝুঁকি মূল্যায়ন; সাইটটি ভুয়া বা বৈধ—এর প্রমাণ নয়।", "pa-IN": "ਇਹ ਜੋਖਮ ਦਾ ਮੁਲਾਂਕਣ ਹੈ; ਇਹ ਸਾਈਟ ਦੇ ਨਕਲੀ ਜਾਂ ਜਾਇਜ਼ ਹੋਣ ਦਾ ਸਬੂਤ ਨਹੀਂ ਹੈ।", "ml-IN": "ഇത് ഒരു അപകടസാധ്യതാ വിലയിരുത്തൽ മാത്രമാണ്; സൈറ്റ് വ്യാജമോ യഥാർത്ഥമോ എന്നതിന് തെളിവല്ല." },
 });
 
 function isSelectionCommand(text: string): boolean {
@@ -315,6 +326,8 @@ export const App: React.FC = () => {
   const [snips, setSnips] = useState<SnipContext[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [siteChatMessages, setSiteChatMessages] = useState<ChatMessage[]>([]);
+  const [siteSafety, setSiteSafety] = useState<SiteSafetyResult | null>(null);
+  const [siteSafetyLoading, setSiteSafetyLoading] = useState(false);
   const [siteChat, setSiteChat] = useState<SiteChatState>({
     status: "idle",
     startUrl: "",
@@ -350,6 +363,7 @@ export const App: React.FC = () => {
   const siteChatRef = useRef<SiteChatState>(siteChat);
   const siteChatRunRef = useRef(0);
   const siteChatTabRef = useRef<number | null>(null);
+  const siteSafetyRunRef = useRef(0);
   stepsRef.current = steps;
   siteChatRef.current = siteChat;
 
@@ -360,6 +374,12 @@ export const App: React.FC = () => {
     siteChatTabRef.current = null;
     setSiteChat({ status: "idle", startUrl: "", siteId: "", jobId: "", pagesIndexed: 0, message: "" });
     setSiteChatMessages([]);
+  };
+
+  const resetSiteSafety = () => {
+    siteSafetyRunRef.current += 1;
+    setSiteSafety(null);
+    setSiteSafetyLoading(false);
   };
 
   // Load saved settings from chrome.storage.local
@@ -398,6 +418,7 @@ export const App: React.FC = () => {
         resetSiteChatSession();
       }
       setActiveTabId(activeInfo.tabId);
+      resetSiteSafety();
       chrome.tabs.get(activeInfo.tabId, (t) => {
         if (t?.title) setActiveTabTitle(t.title);
         if (t?.url !== undefined) setActiveTabUrl(t.url || "");
@@ -413,6 +434,7 @@ export const App: React.FC = () => {
         setActiveTabId(tabId);
         setActiveTabTitle(tab.title || "Web Page");
         setActiveTabUrl(tab.url || "");
+        resetSiteSafety();
       }
     };
 
@@ -840,6 +862,7 @@ export const App: React.FC = () => {
     if (siteChatRef.current.status === "queued" || siteChatRef.current.status === "crawling" || siteChatRef.current.status === "processing") return;
 
     if (siteIndexPollRef.current) clearTimeout(siteIndexPollRef.current);
+    resetSiteSafety();
     const runId = ++siteChatRunRef.current;
     siteChatTabRef.current = activeTabId;
     setSnips([]);
@@ -877,6 +900,37 @@ export const App: React.FC = () => {
       setSiteChat((previous) => ({ ...previous, status: "failed", message }));
       setStatus("idle");
       setStatusText(translate("Could not start site chat", "साइट चैट शुरू नहीं हो सकी"));
+    }
+  };
+
+  const checkCurrentSiteSafety = async () => {
+    if (!activeTabUrl || isRestrictedPage(activeTabUrl)) {
+      setStatus("idle");
+      setStatusText(translate("Open a normal website first", "पहले सामान्य वेबसाइट खोलें"));
+      return;
+    }
+    if (!settings.siteChatEndpoint.trim()) {
+      setStatus("idle");
+      setStatusText(translate("Add the Site knowledge API endpoint in Settings", "सेटिंग्स में साइट नॉलेज API endpoint जोड़ें"));
+      setSettingsOpen(true);
+      return;
+    }
+    const runId = ++siteSafetyRunRef.current;
+    setSiteSafetyLoading(true);
+    setStatus("thinking");
+    setStatusText(translate("Checking site safety...", "साइट सुरक्षा जांच रहे हैं..."));
+    try {
+      const result = await requestSiteSafety({ endpoint: settings.siteChatEndpoint, apiKey: settings.siteChatApiKey }, activeTabUrl);
+      if (runId !== siteSafetyRunRef.current) return;
+      setSiteSafety(result);
+      setStatus("idle");
+      setStatusText(translate("Safety check complete", "सुरक्षा जांच पूरी हुई"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not check site safety.";
+      setStatus("idle");
+      setStatusText(message);
+    } finally {
+      if (runId === siteSafetyRunRef.current) setSiteSafetyLoading(false);
     }
   };
 
@@ -1494,6 +1548,16 @@ export const App: React.FC = () => {
                 {translate("Select area", "क्षेत्र चुनें")}
               </button>
               <button
+                className="site-safety-button"
+                type="button"
+                onClick={() => void checkCurrentSiteSafety()}
+                disabled={siteSafetyLoading}
+                title="Check this site for security and phishing risk signals"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.4 2.9 8.4 7 10 4.1-1.6 7-5.6 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+                {siteSafetyLoading ? translate("Checking…", "जांच हो रही है…") : translate("Check site", "साइट जांचें")}
+              </button>
+              <button
                 className="site-chat-button"
                 type="button"
                 onClick={() => void startSiteChat()}
@@ -1594,6 +1658,40 @@ export const App: React.FC = () => {
                       ? siteChat.message || translate("Indexing failed", "इंडेक्सिंग विफल रही")
                       : `${siteChat.message || translate("Crawler is working", "क्रॉलर काम कर रहा है")}${siteChat.pagesIndexed > 0 ? ` · ${siteChat.pagesIndexed}${siteChat.totalPages ? `/${siteChat.totalPages}` : ""} ${translate("pages", "पेज")}` : ""}`}
                 </span>
+              </div>
+            </div>
+          )}
+
+          {siteSafety && (
+            <div className={`site-safety-card ${siteSafety.verdict}`} aria-label="Site safety result">
+              <div className="site-safety-card-header">
+                <div>
+                  <div className="site-chat-kicker">{translate("SITE SAFETY", "साइट सुरक्षा")}</div>
+                  <strong>
+                    {siteSafety.verdict === "low-risk"
+                      ? translate("Low risk", "कम जोखिम")
+                      : siteSafety.verdict === "caution"
+                        ? translate("Use caution", "सावधानी बरतें")
+                        : siteSafety.verdict === "high-risk"
+                          ? translate("High risk", "उच्च जोखिम")
+                          : translate("Unknown", "अज्ञात")}
+                  </strong>
+                </div>
+                <span className="site-safety-score">{siteSafety.score}/100</span>
+              </div>
+              <p className="site-safety-summary">{siteSafety.summary}</p>
+              {siteSafety.reasons.length > 0 && (
+                <div className="site-safety-reasons">
+                  {siteSafety.reasons.slice(0, 5).map((reason, index) => (
+                    <div className="site-safety-reason" key={`${reason.title}-${index}`}>
+                      <span className={`safety-severity ${reason.severity}`} aria-hidden="true" />
+                      <div><strong>{reason.title}</strong><span>{reason.detail}</span></div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="site-safety-disclaimer">
+                {translate("This is a risk assessment, not proof that a site is fake or legitimate.", "यह जोखिम आकलन है; इससे साइट के नकली या वैध होने का पक्का प्रमाण नहीं मिलता।")}
               </div>
             </div>
           )}

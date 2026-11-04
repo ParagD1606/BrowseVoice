@@ -2,6 +2,7 @@ import http from "node:http";
 import { pathToFileURL } from "node:url";
 import { createConfig } from "./config.mjs";
 import { KnowledgeService } from "./service.mjs";
+import { checkSiteSafety } from "./safety-checker.mjs";
 
 function json(res, statusCode, body, headers = {}) {
   res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8", ...headers });
@@ -82,6 +83,12 @@ export async function createServer(config = createConfig()) {
       if (request.method === "POST" && path === "/sites/chat") {
         const body = await readBody(request);
         const result = await knowledge.chat(body);
+        json(response, 200, result, cors);
+        return;
+      }
+      if (request.method === "POST" && path === "/sites/safety") {
+        const body = await readBody(request);
+        const result = await checkSiteSafety(body.url, config);
         json(response, 200, result, cors);
         return;
       }
