@@ -222,7 +222,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         .then((result) => {
           // Immediately capture fresh post-action observation
           const freshSnapshot = capturePageSnapshot();
-          sendResponse({ ok: true, result, freshSnapshot });
+          sendResponse({ ok: result.success, result, error: result.error, freshSnapshot });
         })
         .catch((err) => {
           sendResponse({

@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1920, initial-scale=1">
+<title>Browse Voice — 15 second launch composition</title>
+<style>
+:root{--ground:#f7f5ef;--ink:#152e4d;--blue:#175ba4;--blue2:#e7f0fb;--saffron:#ef9b24;--muted:#738397;--line:#deded8;--white:#fff;--green:#238752;--night:#151c29;--panel:#1c2432;--soft:#aab4c1}
+*{box-sizing:border-box}html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:var(--ground);color:var(--ink);font-family:Inter,"Noto Sans Devanagari","Arial",sans-serif}body{-webkit-font-smoothing:antialiased}
+#stage{position:absolute;inset:0;overflow:hidden;background:var(--ground)}
+#grain{position:absolute;inset:0;opacity:.08;background-image:radial-gradient(#8b8173 0.6px,transparent .6px);background-size:7px 7px;pointer-events:none}
+#brand-kicker{position:absolute;left:125px;top:75px;display:flex;align-items:center;gap:12px;opacity:0;transform:translateY(18px)}
+.bv-mark{width:38px;height:38px;border-radius:11px;background:var(--blue);display:grid;place-items:center;color:white;font-weight:800;font-size:20px;box-shadow:0 8px 18px #175ba426}
+.kicker-name{font-size:20px;font-weight:750;letter-spacing:-.04em}.kicker-sub{margin-top:3px;font-size:10px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase}
+#opening{position:absolute;left:130px;top:210px;width:950px;opacity:0;transform:translateY(25px)}
+#opening-hi{font-size:68px;line-height:1.16;font-weight:760;letter-spacing:-.045em;color:var(--ink)}
+#opening-en{margin-top:16px;font-size:24px;letter-spacing:.01em;color:var(--muted)}
+#mic-orb{position:absolute;left:176px;top:594px;width:132px;height:132px;border-radius:50%;background:#fff;border:1px solid #e2ded5;display:grid;place-items:center;box-shadow:0 18px 55px #19385b14;opacity:0;transform:scale(.7)}
+#mic-orb::before{content:"";position:absolute;inset:14px;border:1px solid #e9e5dc;border-radius:50%}
+#mic-icon{position:relative;width:46px;height:54px;color:var(--blue)}
+#mic-icon svg{width:100%;height:100%}
+#ui-group{position:absolute;inset:0;transform-origin:970px 550px}
+#browser{position:absolute;left:130px;top:250px;width:1085px;height:650px;transform-origin:0 0;border:1px solid #d7dde4;border-radius:18px;overflow:hidden;background:#fff;box-shadow:0 36px 80px -44px #263c5944,0 2px 7px #162f4b13;opacity:0;transform:translateY(70px) scale(.94)}
+#browser-bar{height:52px;background:#f6f8fa;border-bottom:1px solid #e4e8ed;display:flex;align-items:center;padding:0 18px;gap:9px}
+.dot{width:9px;height:9px;border-radius:50%;background:#d0d7de}.address{height:28px;flex:1;margin:0 14px;border:1px solid #e6e9ed;background:#fff;border-radius:8px;display:flex;align-items:center;padding:0 12px;color:#778597;font:12px "Geist Mono",monospace}.address-mark{color:#3e8c64;margin-right:7px}
+#portal{padding:34px 42px 36px;position:relative;height:calc(100% - 52px);background:#f9fbfd}
+.portal-top{height:57px;display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;padding-bottom:18px;border-bottom:1px solid #e8edf2}
+.portal-brand{display:flex;align-items:center;gap:10px;font-weight:730;font-size:17px;color:#174b7c}.bolt{width:31px;height:31px;background:#e8f2fb;border-radius:9px;display:grid;place-items:center;color:#df8d18;font-size:18px}.portal-nav{color:#8492a0;font-size:11px}.portal-demo{padding:5px 9px;background:#fff5df;border-radius:20px;color:#906116;font-size:9px;font-weight:750;letter-spacing:.06em}
+.portal-title{font-size:25px;letter-spacing:-.035em;color:#1c3c5b;font-weight:720}.portal-desc{margin-top:6px;color:#7b8998;font-size:12px}
+#bill-view,#form-view{position:absolute;left:42px;top:151px;width:1000px;opacity:0}
+.lookup-card{margin-top:22px;padding:22px 25px 23px;border:1px solid #dfe6ed;border-radius:12px;background:white;box-shadow:0 3px 12px #20395408}
+.card-title{font-size:17px;font-weight:700;color:#203f60}.card-hint{margin-top:4px;color:#8492a0;font-size:11px}
+.field-label{display:block;margin:18px 0 7px;color:#50647a;font-size:11px;font-weight:650}
+.input-row{height:42px;display:flex;align-items:center;padding:0 13px;border:1px solid #cfdae5;border-radius:7px;color:#93a0ad;background:#fff;font-size:12px}
+.input-value{color:#25435f;font-weight:620;letter-spacing:.08em}
+.check-button{display:inline-flex;margin-top:17px;padding:11px 16px;align-items:center;gap:9px;border-radius:7px;background:#164f8e;color:#fff;font-size:11px;font-weight:700;box-shadow:0 5px 12px #164f8e22}
+.bill-result{display:flex;align-items:center;justify-content:space-between;margin-top:15px;padding:17px 20px;border:1px solid #dcebe0;border-radius:10px;background:#f8fcf8;opacity:0}
+.bill-ok{font-size:11px;color:#328454;font-weight:650}.bill-total{margin-top:5px;font-size:23px;color:#193957;font-weight:750}.bill-date{color:#7b8997;font-size:10px}.due{padding:5px 9px;border-radius:20px;background:#fff5e5;color:#9c6717;font-size:10px;font-weight:700}
+#form-view .lookup-card{margin-top:22px;min-height:326px}.form-mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:3px 18px}.form-answer{height:39px;display:flex;align-items:center;padding:0 12px;border:1px solid #d8e0e7;border-radius:6px;color:#a1aeb9;font-size:11px}.form-answer.filled{color:#244867;background:#fbfdff;font-weight:650}
+#assistant{position:absolute;left:1280px;top:180px;width:475px;height:704px;transform-origin:0 0;border:1px solid #30394a;border-radius:19px;background:var(--night);box-shadow:0 30px 75px -34px #0b1d3240;overflow:hidden;opacity:0;transform:translateY(75px) scale(.96);color:#f2f5f9}
+.as-header{height:79px;padding:0 23px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #30394a;background:#1a2230}.as-brand{display:flex;align-items:center;gap:12px}.as-mic{font-size:22px;color:#8dd9df}.as-name{font-size:15px;font-weight:740}.as-lang{margin-top:4px;color:#72a9ef;font-size:10px}.listening{padding:6px 9px;border-radius:20px;color:#b9c9d8;background:#263448;font-size:9px}.listening i{display:inline-block;width:6px;height:6px;margin-right:5px;background:#4ad0a0;border-radius:50%}
+.as-body{padding:20px 19px}.as-caption{margin:0 1px 13px;color:#94a3b4;font-size:9px;font-weight:700;letter-spacing:.1em}.bubble{max-width:90%;margin:0 0 11px;padding:12px 14px;border-radius:11px;font-size:18px;line-height:1.45;opacity:0;transform:translateY(12px)}.bubble.user{margin-left:auto;background:#203b62;color:#eef5ff;border-bottom-right-radius:4px}.bubble.assistant{background:#252e3d;color:#f0f3f7;border-bottom-left-radius:4px}.bubble small{display:block;margin-top:5px;color:#a8b8ca;font-size:9px}.progress-card{margin-top:22px;padding:13px 14px;border:1px solid #303b4b;border-radius:10px;background:#1a222e;opacity:0}.progress-label{display:flex;justify-content:space-between;color:#9cabbc;font-size:10px}.progress-line{height:3px;margin-top:10px;overflow:hidden;border-radius:4px;background:#303d4e}.progress-line i{display:block;width:0;height:100%;border-radius:4px;background:#4ac99b}
+#chip-row{position:absolute;left:470px;top:915px;display:flex;align-items:center;gap:18px;opacity:0;transform:translateY(25px)}.task-chip{display:flex;align-items:center;gap:9px;padding:12px 18px;border:1px solid #e3dfd6;border-radius:28px;background:#fff;color:#455c73;box-shadow:0 9px 25px #20334a0a;font-size:17px;font-weight:650}.chip-icon{display:grid;width:23px;height:23px;place-items:center;background:#eef4fa;color:#175ba4;border-radius:7px;font-size:12px}
+#end-lockup{position:absolute;left:0;top:0;width:1920px;height:1080px;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;background:var(--ground)}
+#end-lockup .end-mark{width:82px;height:82px;border-radius:23px;background:var(--blue);display:grid;place-items:center;color:white;font-size:42px;font-weight:800;box-shadow:0 18px 42px #175ba42c}
+#brand-name{margin-top:24px;font-size:73px;line-height:1;font-weight:780;letter-spacing:-.055em;color:var(--ink)}
+#brand-hi{margin-top:23px;color:var(--blue);font-size:30px;font-weight:700;letter-spacing:-.025em}
+#brand-en{margin-top:11px;color:#64768a;font-size:18px;letter-spacing:.01em}
+#cursor{position:absolute;left:0;top:0;width:36px;height:48px;opacity:0;filter:drop-shadow(0 3px 4px #10243a3a);transform-origin:4px 4px;z-index:20}
+#wave{position:absolute;inset:0;width:1920px;height:1080px;pointer-events:none;z-index:9}
+#subtitles{position:absolute;left:130px;bottom:69px;opacity:0;color:#6b7c8d;font-size:22px;letter-spacing:.015em}
+#hud{display:none;position:absolute;right:12px;bottom:10px;color:#b22;font:14px monospace}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="grain"></div>
+  <div id="brand-kicker"><div class="bv-mark">B</div><div><div class="kicker-name">Browse Voice</div><div class="kicker-sub">आपका ऑनलाइन साथी</div></div></div>
+  <div id="opening"><div id="opening-hi">ऑनलाइन काम,<br>अपनी भाषा में।</div><div id="opening-en">Everyday websites, a little easier.</div></div>
+  <div id="mic-orb"><div id="mic-icon"><svg viewBox="0 0 48 56" fill="none"><rect x="16" y="3" width="16" height="34" rx="8" fill="currentColor"/><path d="M9 25v3a15 15 0 0 0 30 0v-3M24 43v9m-9 0h18" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M19 12h10M19 18h10M19 24h10M19 30h10" stroke="#f7f5ef" stroke-width="1.8" stroke-linecap="round"/></svg></div></div>
+  <div id="ui-group">
+    <div id="browser">
+      <div id="browser-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i><div class="address"><span class="address-mark">●</span>services.bijlisewa.example / consumer</div><span style="color:#97a2ad;font-size:13px">☆</span></div>
+      <div id="portal">
+        <div class="portal-top"><div class="portal-brand"><span class="bolt">ϟ</span>BijliSeva <span style="font-size:10px;color:#8c9aab;font-weight:500">ELECTRICITY SERVICES</span></div><div class="portal-demo">SAMPLE DEMO</div></div>
+        <div id="bill-view"><div class="portal-title">Pay your electricity bill</div><div class="portal-desc">Find your latest bill using your consumer number.</div><div class="lookup-card"><div class="card-title">Consumer bill lookup</div><div class="card-hint">Your consumer number appears on a previous bill.</div><label class="field-label">Consumer number</label><div class="input-row"><span class="input-value" id="consumer-value"></span><span id="consumer-caret" style="margin-left:2px;color:#175ba4">▏</span></div><div class="check-button" id="check-button">View bill <span>→</span></div><div class="bill-result" id="bill-result"><div><div class="bill-ok">✓ Bill found</div><div class="bill-total">₹1,450 <small style="font-size:11px;font-weight:550">due</small></div><div class="bill-date">Due date · 15 Nov</div></div><span class="due">PAYMENT DUE</span></div></div></div>
+        <div id="form-view"><div class="portal-title">Application details</div><div class="portal-desc">Tell me what you need, and I can help with each field.</div><div class="lookup-card"><div class="card-title">Consumer service request</div><div class="card-hint">Complete the details below to continue.</div><div class="form-mini-grid"><div><label class="field-label">Full name</label><div class="form-answer filled">Ramesh Kumar</div></div><div><label class="field-label">Mobile number</label><div class="form-answer filled">98••• ••234</div></div><div><label class="field-label">Request type</label><div class="form-answer">Choose an option</div></div><div><label class="field-label">District</label><div class="form-answer">Select district</div></div></div><div class="check-button" style="margin-top:20px;background:#edf3f8;color:#516a82">Review details</div></div></div>
+      </div>
+    </div>
+    <div id="assistant">
+      <div class="as-header"><div class="as-brand"><span class="as-mic">◖))</span><div><div class="as-name">Browse Voice</div><div class="as-lang">हिन्दी · Listening</div></div></div><div class="listening"><i></i> सुन रहा हूँ</div></div>
+      <div class="as-body"><p class="as-caption">आपकी बातचीत</p>
+        <div class="bubble user" id="b1">मुझे बिजली का बिल देखना है<small>आवाज़ से लिखा गया</small></div>
+        <div class="bubble assistant" id="b2">ज़रूर। आपका consumer number क्या है?</div>
+        <div class="bubble user" id="b3">100234567<small>बिल देखना</small></div>
+        <div class="bubble assistant" id="b4">आपका बिल मिल गया। अब आगे क्या करना चाहेंगे?</div>
+        <div class="bubble user" id="b5">यह फ़ॉर्म भरने में मदद करें</div>
+        <div class="bubble assistant" id="b6">ज़रूर। एक-एक जानकारी साथ में भरते हैं।</div>
+        <div class="progress-card" id="progress"><div class="progress-label"><span>आपका काम</span><span id="progress-text">एक कदम पूरा</span></div><div class="progress-line"><i id="progress-fill"></i></div></div>
+      </div>
+    </div>
+  </div>
+  <div id="chip-row"><div class="task-chip"><span class="chip-icon">▤</span>बिल देखना</div><div class="task-chip"><span class="chip-icon">☷</span>फ़ॉर्म भरना</div><div class="task-chip"><span class="chip-icon">⌕</span>वेबसाइट समझना</div></div>
+  <div id="end-lockup"><div class="end-mark">B</div><div id="brand-name">Browse Voice</div><div id="brand-hi">आपकी बात। आपकी भाषा। आपका वेब।</div><div id="brand-en">Your voice. Your language. Your web.</div></div>
+  <canvas id="wave" width="1920" height="1080"></canvas>
+  <svg id="cursor" viewBox="0 0 38 50"><path d="M3 2 L34 26 L21 27 L29 44 L23 47 L15 30 L6 39 Z" fill="#fff" stroke="#15324f" stroke-width="2.4" stroke-linejoin="round"/></svg>
+  <div id="subtitles">A patient helper, one step at a time.</div>
+  <div id="hud"></div>
+</div>
+<script src="./motion.js"></script>
+<script>
+(() => {
+  const OM = window.OM, W = 1920, H = 1080;
+  const el = id => document.getElementById(id);
+  const clamp = x => Math.max(0, Math.min(1, x));
+  const appear = (node, t, start, omega=18) => {
+    const k = OM.spring(t-start,.72,omega);
+    node.style.opacity = clamp(k*1.45);
+    node.style.transform = `translateY(${(1-k)*26}px) scale(${.97+.03*k})`;
+  };
+  const rise = (node,t,start,dist=30) => {
+    const m=OM.wordRise(t,start,{dist,omega:20,fade:1.5});
+    node.style.opacity=m.op; node.style.transform=`translateY(${m.y}px) scale(${m.s})`;
+  };
+  const path = [
+    {t:0,x:242,y:660},{t:1.6,x:345,y:680},{t:3.2,x:480,y:700},
+    {t:4.5,x:650,y:690},{t:6.2,x:850,y:620},{t:7.8,x:1040,y:560},
+    {t:9.2,x:1210,y:520},{t:10.7,x:1405,y:515},{t:12.0,x:1580,y:600},
+    {t:13.1,x:1120,y:670},{t:14.1,x:960,y:650},{t:15,x:960,y:650}
+  ];
+  function pointAt(t){
+    let i=0; while(i<path.length-2 && t>path[i+1].t)i++;
+    const a=path[i],b=path[i+1],u=OM.ease.smoother(OM.seg(t,a.t,b.t));
+    return {x:OM.lerp(a.x,b.x,u),y:OM.lerp(a.y,b.y,u)};
+  }
+  function drawWave(t){
+    const c=el('wave'),ctx=c.getContext('2d');ctx.clearRect(0,0,W,H);
+    const p=pointAt(t), pts=path.filter(q=>q.t<t);pts.push({t,x:p.x,y:p.y});
+    if(pts.length<2)return;
+    const length=pts.reduce((sum,q,i)=>i?sum+Math.hypot(q.x-pts[i-1].x,q.y-pts[i-1].y):0,0);
+    const amp=(t<3.1?6:t<7.8?8:t<12.8?5:1.5),phase=t*9;
+    const samples=Math.max(32,Math.ceil(length/7));
+    ctx.beginPath();
+    for(let i=0;i<=samples;i++){
+      const d=i/samples*length;let acc=0,a=pts[0],b=pts[1],u=0;
+      for(let j=1;j<pts.length;j++){const seg=Math.hypot(pts[j].x-pts[j-1].x,pts[j].y-pts[j-1].y);if(acc+seg>=d||j===pts.length-1){a=pts[j-1];b=pts[j];u=seg?(d-acc)/seg:0;break}acc+=seg}
+      const x=OM.lerp(a.x,b.x,u),y=OM.lerp(a.y,b.y,u),dx=b.x-a.x,dy=b.y-a.y,n=Math.hypot(dx,dy)||1;
+      const w=Math.sin(d*.054-phase)*amp*(.35+.65*clamp(t/1.4));
+      const xx=x-dy/n*w,yy=y+dx/n*w;
+      if(i===0)ctx.moveTo(xx,yy);else ctx.lineTo(xx,yy);
+    }
+    const gather=1-OM.ease.smooth(OM.seg(t,12.4,13.45));
+    ctx.save();ctx.globalAlpha=gather;ctx.lineCap='round';ctx.lineJoin='round';ctx.strokeStyle='#efa02d';ctx.shadowColor='#f4b44e';ctx.shadowBlur=18;ctx.lineWidth=8;ctx.stroke();ctx.shadowBlur=0;ctx.strokeStyle='#fffdf7';ctx.lineWidth=2.2;ctx.stroke();ctx.restore();
+    const point=pointAt(t),pulse=OM.impact(t,Math.floor(t*1.5)/1.5,{decay:8,omega:23});
+    ctx.globalAlpha=gather;ctx.beginPath();ctx.arc(point.x,point.y,5.2+Math.max(0,pulse.r)*3.2,0,Math.PI*2);ctx.fillStyle='#155a9f';ctx.fill();ctx.globalAlpha=1;
+    const seal=OM.ease.smooth(OM.seg(t,13.0,13.8));
+    if(seal>0){ctx.save();ctx.globalAlpha=seal;ctx.beginPath();ctx.moveTo(770,700);ctx.quadraticCurveTo(960,704,1150,700);ctx.lineCap='round';ctx.strokeStyle='#efa02d';ctx.shadowColor='#f4b44e';ctx.shadowBlur=12;ctx.lineWidth=7;ctx.stroke();ctx.restore()}
+  }
+  function setBubble(id,t,start){const n=el(id),m=OM.popIn(t,start,{rise:15,s0:.97,ds:.03,omega:20,fade:1.6});n.style.opacity=m.op;n.style.transform=`translateY(${m.dy}px) scale(${m.s})`}
+  function seek(t){
+    t=clamp(t/15)*15;
+    appear(el('brand-kicker'),t,0.08,17);
+    if(t<2.6){appear(el('opening'),t,.22,15);appear(el('mic-orb'),t,.85,17)}
+    else {const out=OM.ease.smooth(OM.seg(t,2.0,2.5));el('opening').style.opacity=1-out;el('mic-orb').style.opacity=1-out}
+    const win=OM.morphRect(t,2.4,3.7,{x:220,y:610,w:120,h:120,r:60},{x:130,y:250,w:1085,h:650,r:18});
+    if(t>=2.2){el('browser').style.opacity=clamp(OM.spring(t-2.2,.78,17)*1.3);el('browser').style.transform=`translate(${win.x-130}px,${win.y-250}px) scale(${win.w/1085})`;el('browser').style.borderRadius=`${win.r}px`}
+    const panel=OM.morphRect(t,2.8,4.0,{x:750,y:670,w:90,h:90,r:45},{x:1280,y:180,w:475,h:704,r:19});
+    if(t>=2.65){el('assistant').style.opacity=clamp(OM.spring(t-2.65,.76,17)*1.25);el('assistant').style.transform=`translate(${panel.x-1280}px,${panel.y-180}px) scale(${panel.w/475})`}
+    const values=OM.typeOn(t,5.0,'100234567',{cps:8,blink:2.0});el('consumer-value').textContent=values.str;el('consumer-caret').style.opacity=values.caret;
+    setBubble('b1',t,3.0);setBubble('b2',t,4.15);setBubble('b3',t,5.35);setBubble('b4',t,7.15);setBubble('b5',t,8.95);setBubble('b6',t,10.05);
+    const check=OM.press(t,6.25,{depth:.05,omega:26});el('check-button').style.transform=`scale(${check.s})`;
+    const found=OM.popIn(t,6.75,{rise:22,s0:.96,ds:.04,omega:18,fade:1.4});el('bill-result').style.opacity=found.op;el('bill-result').style.transform=`translateY(${found.dy}px) scale(${found.s})`;
+    const form=OM.morphRect(t,8.65,9.15,{x:130,y:250,w:1085,h:650,r:18},{x:130,y:250,w:1085,h:650,r:18});
+    const fv=OM.ease.smooth(OM.seg(t,8.65,9.2));el('bill-view').style.opacity=1-fv;el('form-view').style.opacity=fv;
+    const pr=OM.popIn(t,10.7,{rise:15,s0:.97,ds:.03,omega:19,fade:1.5});el('progress').style.opacity=pr.op;el('progress').style.transform=`translateY(${pr.dy}px) scale(${pr.s})`;el('progress-fill').style.width=`${OM.ease.smooth(OM.seg(t,10.8,12.2))*100}%`;
+    const chips=OM.popIn(t,11.35,{rise:20,s0:.96,ds:.04,omega:18,fade:1.5});el('chip-row').style.opacity=chips.op;el('chip-row').style.transform=`translateY(${chips.dy}px) scale(${chips.s})`;
+    const dissolve=OM.ease.smooth(OM.seg(t,12.65,13.45));el('end-lockup').style.opacity=dissolve;
+    el('ui-group').style.transform=`scale(${1-.12*dissolve})`;el('ui-group').style.opacity=1-dissolve*.94;
+    if(t>=13.05){const m=OM.popIn(t,13.05,{rise:25,s0:.88,ds:.12,omega:17,fade:1.5});el('brand-name').style.transform=`translateY(${m.dy}px) scale(${m.s})`;el('brand-name').style.opacity=m.op;el('brand-hi').style.opacity=OM.wordRise(t,13.35,{dist:16,omega:18}).op;el('brand-en').style.opacity=OM.wordRise(t,13.62,{dist:12,omega:19}).op}
+    const cur=OM.cursor(t,[[0,250,660],[2.7,410,660],[4.2,630,690],[5.1,725,480],[6.2,365,638],[7.1,365,690],[8.2,915,690],[9.2,1410,520],[10.1,1450,700],[11.9,1600,625],[13.0,1050,650],[14.9,960,650]],[5.15,6.25,9.2,11.8],{down:.83,hold:.12});
+    el('cursor').style.opacity=t>1.7&&t<13.1?1-dissolve:0;el('cursor').style.transform=`translate(${cur.x}px,${cur.y}px) scale(${cur.s})`;
+    const sub= t<3.1?'Your voice opens the way.':t<7.9?'A bill, one clear step at a time.':t<11.5?'Forms feel easier with someone beside you.':t<13.1?'You choose what happens next.':'Your voice. Your language. Your web.';
+    el('subtitles').textContent=sub;el('subtitles').style.opacity=t<13.2?OM.ease.smooth(OM.seg(t,.1,.42))*(1-dissolve):0;
+    drawWave(t);
+    el('hud').textContent=`${t.toFixed(2)}s`;
+  }
+  window.__ready=Promise.resolve(document.fonts.ready);
+  window.__seek=t=>{seek(t);return Promise.resolve()};
+  window.__meta={dur:15,fps:30,w:W,h:H};
+  window.__motion=(a,b)=>Math.abs(b-a)*310+2;
+})();
+</script>
+</body>
+</html>

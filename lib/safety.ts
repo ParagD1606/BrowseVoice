@@ -47,7 +47,7 @@ export interface PageSnapshot {
 export const SENSITIVE_PATTERNS = {
   password: /(password|passwd|passcode|secret|pin|mpin|tpin)/i,
   otp: /(otp|one[-\s_]?time[-\s_]?password|verification[-\s_]?code|auth[-\s_]?code)/i,
-  paymentCard: /(card[_\s-]?no|card[_\s-]?number|cardnum|credit[_\s-]?card|debit[_\s-]?card|cvv|cvc|expiry|exp[_\s-]?date)/i,
+  paymentCard: /(card[_\s-]?no|card[_\s-]?number|cardnum|credit[_\s-]?card|debit[_\s-]?card|cvv|cvc|expiry|exp[_\s-]?date|upi[_\s-]?id|vpa|virtual[_\s-]?payment[_\s-]?address)/i,
   aadhaar: /(aadhaar|aadhar|uidai|unique[-\s_]?identification)/i,
   generalSensitive: /(ssn|pan[_\s-]?card|bank[_\s-]?acc|account[_\s-]?number)/i,
 };
@@ -63,7 +63,7 @@ export const STOP_WORDS_REGEX =
  * Words that confirm a pending consequential/submit/payment action.
  */
 export const CONFIRMATION_WORDS_REGEX =
-  /\b(yes|haan|ha|haa|sahi hai|theek hai|proceed|confirm|bharo|chukaao|kardo|kar do|approve|pay now)\b/i;
+  /\b(yes|haan|ha|haa|sahi hai|theek hai|proceed|confirm|approve|pay now)\b|हाँ|हां|जी हाँ/i;
 
 /**
  * Patterns identifying submit, payment, or irreversible actions requiring confirmation.

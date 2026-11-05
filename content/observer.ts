@@ -124,14 +124,26 @@ function collectInteractiveCandidates(root: Document | ShadowRoot): HTMLElement[
  */
 function extractPageSummary(): string {
   const headings = Array.from(document.querySelectorAll("h1, h2, h3, .bill-amount, .status-badge"))
+    .filter((el) => isElementVisible(el as HTMLElement))
     .map((el) => (el as HTMLElement).innerText?.trim())
     .filter(Boolean)
     .slice(0, 6)
     .join(" | ");
 
   const bodyText = document.body?.innerText?.replace(/\s+/g, " ").slice(0, 400) || "";
+  const receipt = document.querySelector<HTMLElement>("#section-receipt, [data-payment-receipt]");
+  const receiptText = receipt && isElementVisible(receipt)
+    ? receipt.innerText.replace(/\s+/g, " ")
+    : "";
+  const receiptEvidence =
+    /payment\s+successful|भुगतान\s+सफल/i.test(receiptText) &&
+    /transaction\s*(?:id|no\.?|number)|receipt|रसीद|लेन.?देन/i.test(receiptText)
+      ? "Visible payment receipt: Payment Successful; Transaction ID present."
+      : "";
 
-  return headings ? `${headings} - ${bodyText}` : bodyText;
+  return [headings ? `${headings} - ${bodyText}` : bodyText, receiptEvidence]
+    .filter(Boolean)
+    .join(" | ");
 }
 
 /**

@@ -22,6 +22,7 @@ import {
 import {
   createPlanner,
   answerAboutSnips,
+  convertFormAnswerToEnglish,
   type PlannerProvider,
   type StepLogEntry,
   type LLMConfig,
@@ -34,6 +35,7 @@ import {
   type PageSnapshot,
 } from "../lib/safety";
 import { validatePlannerAction, type PlannerAction } from "../lib/schema";
+import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "../lib/payment-state";
 import { MicrophoneSession } from "./mic";
 import {
   askSiteQuestion,
@@ -135,11 +137,7 @@ function collectFormFields(snapshot: PageSnapshot): { fields: FormFieldDescripto
 
 function findFormField(snapshot: PageSnapshot, descriptor: FormFieldDescriptor, answer?: string) {
   if (descriptor.kind === "radio") {
-    const answerText = (answer || "").trim().toLowerCase();
-    const optionIndex = /^\d+$/.test(answerText) ? Number(answerText) - 1 : -1;
-    const selectedLabel = optionIndex >= 0
-      ? descriptor.options?.[optionIndex]
-      : descriptor.options?.find((option) => option.toLowerCase() === answerText || option.toLowerCase().includes(answerText));
+    const selectedLabel = matchOption(descriptor.options || [], answer || "");
     if (!selectedLabel) return undefined;
     return snapshot.interactiveElements.find((element) =>
       element.tag === "input" && element.type?.toLowerCase() === "radio" && element.name === descriptor.name
@@ -159,6 +157,65 @@ function parseYesNo(value: string): boolean | null {
   if (/^(yes|y|yeah|haan|ha|check|tick|true)(?:\b|$)/i.test(answer) || /^(हाँ|हां)(?:\s|$|[,!.])/u.test(answer)) return true;
   if (/^(no|n|nope|nahin|nahi|leave unchecked|false)(?:\b|$)/i.test(answer) || /^(नहीं|नहि)(?:\s|$|[,!.])/u.test(answer)) return false;
   return null;
+}
+
+function toEnglishDigits(value: string): string {
+  return value.replace(/[०-९]/g, (digit) => String("०१२३४५६७८९".indexOf(digit)));
+}
+
+function matchOption(options: string[], answer: string): string | undefined {
+  const normalized = answer.trim().toLowerCase();
+  const ordinal = new Map<string, number>([
+    ["पहला", 0], ["पहली", 0], ["एक", 0], ["दूसरा", 1], ["दूसरी", 1], ["दो", 1],
+    ["तीसरा", 2], ["तीसरी", 2], ["तीन", 2], ["चौथा", 3], ["चौथी", 3], ["चार", 3],
+  ]).get(normalized);
+  if (ordinal !== undefined) return options[ordinal];
+  const numericIndex = /^\d+$/.test(normalized) ? Number(normalized) - 1 : -1;
+  if (numericIndex >= 0) return options[numericIndex];
+  return options.find((option) => option.toLowerCase() === normalized || option.toLowerCase().includes(normalized));
+}
+
+/** Ask for a concrete value, using the field's accessible metadata when available. */
+function buildFormFieldQuestion(field: FormFieldDescriptor): string {
+  const label = field.label.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  const normalized = `${label} ${field.name || ""} ${field.type || ""}`.toLowerCase();
+
+  if (field.kind === "checkbox") {
+    return `क्या मैं “${label}” चुनूँ? कृपया हाँ या नहीं में जवाब दें।`;
+  }
+  if (field.kind === "select" || field.kind === "radio") {
+    const options = field.options?.filter(Boolean) || [];
+    return `“${label}” के लिए इनमें से कौन-सा विकल्प चुनूँ? ${options.join(", ")}। विकल्प का नाम या उसका क्रमांक बताइए।`;
+  }
+
+  if (/\b(first.?name|given.?name)\b/.test(normalized)) {
+    return "आपका पहला नाम क्या है? हिंदी में बता सकते हैं; मैं इसे अंग्रेज़ी अक्षरों में लिखूँगा।";
+  }
+  if (/\b(last.?name|surname|family.?name)\b/.test(normalized)) {
+    return "आपका उपनाम या परिवार का नाम क्या है? हिंदी में बताइए; मैं इसे अंग्रेज़ी अक्षरों में लिखूँगा।";
+  }
+  if (/\b(full.?name|name)\b/.test(normalized)) {
+    return `“${label}” के लिए पूरा नाम क्या लिखूँ? हिंदी में बता सकते हैं; मैं नाम को अंग्रेज़ी अक्षरों में लिखूँगा।`;
+  }
+  if (/\b(email|e-mail)\b/.test(normalized) || field.type === "email") {
+    return `“${label}” के लिए कौन-सा ईमेल पता भरूँ? कृपया इसे चैट में अंग्रेज़ी अक्षरों में टाइप करें, जैसे name@example.com, ताकि पता सही रहे।`;
+  }
+  if (/\b(phone|mobile|telephone|contact)\b/.test(normalized) || field.type === "tel") {
+    return `“${label}” के लिए कौन-सा फ़ोन नंबर भरूँ? नंबर टाइप करें; देश का कोड तभी जोड़ें जब फ़ॉर्म माँगे।`;
+  }
+  if (/\b(address|street|city|state|province|district|country|postal|zip|pin.?code)\b/.test(normalized)) {
+    return `“${label}” के लिए पूरा पता या स्थान क्या भरूँ? हिंदी में बता सकते हैं; मैं इसे अंग्रेज़ी में लिखूँगा। अगर यह पिन कोड का फ़ील्ड है, तो कृपया अंक बताएं।`;
+  }
+  if (/\b(date|dob|birth)\b/.test(normalized) || field.type === "date") {
+    return `“${label}” के लिए कौन-सी तारीख भरूँ? कृपया YYYY-MM-DD फ़ॉर्मैट में बताएं, जैसे 2000-11-05।`;
+  }
+  if (field.type === "number") {
+    return `“${label}” के लिए कौन-सी संख्या भरूँ? अंक बताएं और इकाई केवल तभी जोड़ें जब फ़ॉर्म माँगे।`;
+  }
+  if (field.type === "url") {
+    return `“${label}” के लिए कौन-सा वेबसाइट पता भरूँ? कृपया पूरा URL टाइप करें, जैसे https://example.com।`;
+  }
+  return `“${label}” के लिए कौन-सी जानकारी भरूँ? हिंदी में जवाब दें; मैं इसे अंग्रेज़ी में लिखूँगा।`;
 }
 
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
@@ -523,14 +580,14 @@ export const App: React.FC = () => {
   /**
    * Helper to speak using Gnani Timbre with Hindi / Indic language support
    */
-  const speakStatus = async (text: string) => {
+  const speakStatus = async (text: string, languageCode = settings.languageCode) => {
     if (isStoppedRef.current || !text) return;
     setStatus("speaking");
     setStatusText(text);
 
     const gnaniConfig: GnaniConfig = {
       apiKey: settings.gnaniApiKey,
-      languageCode: settings.languageCode,
+      languageCode,
       ttsVoice: "Nalini",
       ttsModel: "timbre-v2.5",
     };
@@ -545,26 +602,20 @@ export const App: React.FC = () => {
     const session = formFillRef.current;
     const field = session?.fields[session.index];
     if (!session || !field) return;
-    const question = field.kind === "select"
-      ? `Which option should I choose for ${field.label}? ${field.options?.join(", ") || ""}`
-      : field.kind === "checkbox"
-        ? `Should I check ${field.label}? Please answer yes or no.`
-        : field.kind === "radio"
-          ? `Which option should I choose for ${field.label}? ${field.options?.join(", ") || ""}`
-          : `What should I enter for ${field.label}?`;
+    const question = buildFormFieldQuestion(field);
     setStatus("idle");
-    setStatusText(`${translate("Field", "फील्ड")} ${session.index + 1} ${translate("of", "में से")} ${session.fields.length}: ${field.label}`);
-    await speakStatus(question);
-    setStatusText(`${translate("Reply with a value for", "इसके लिए मान बताएं:")} ${field.label}`);
+    setStatusText(`Field ${session.index + 1} of ${session.fields.length}: ${field.label}`);
+    await speakStatus(question, "hi-IN");
+    setStatusText(`Reply with a value for: ${field.label}`);
   };
 
   const submitFormFieldAnswer = async (answer: string) => {
     const session = formFillRef.current;
     const field = session?.fields[session.index];
     if (!session || !field) return false;
-    const value = answer.trim();
+    let value = toEnglishDigits(answer.trim());
     if (!value) {
-      setStatusText(`${translate("Please answer for", "कृपया इसका जवाब दें:")} ${field.label}`);
+      setStatusText(`Please answer for: ${field.label}`);
       return true;
     }
 
@@ -575,23 +626,53 @@ export const App: React.FC = () => {
       const checkboxChoice = field.kind === "checkbox" ? parseYesNo(value) : null;
       if (field.kind === "checkbox" && checkboxChoice === null) {
         setStatus("idle");
-        setStatusText(`${translate("Please answer yes or no for", "कृपया हाँ या नहीं बताएं:")} ${field.label}.`);
+        setStatusText(`Please answer yes or no for: ${field.label}.`);
         return true;
       }
 
       const element = findFormField(freshSnapshot, field, field.kind === "radio" ? value : undefined);
       if (!element && field.kind === "radio") {
         setStatus("idle");
-          setStatusText(`${translate("Choose one of these options for", "इनमें से विकल्प चुनें:")} ${field.label}: ${field.options?.join(", ") || ""}`);
+        setStatusText(`Choose one of these options for ${field.label}: ${field.options?.join(", ") || ""}`);
         return true;
       }
       if (!element) throw new Error(`I can no longer find the ${field.label} field. Check the page and try again.`);
+
+      if (field.kind === "text" && /\p{Script=Devanagari}/u.test(value)) {
+        const normalizedField = `${field.label} ${field.name || ""} ${field.type || ""}`.toLowerCase();
+        if (/email|e-mail|url|website|website address/.test(normalizedField)) {
+          setStatus("idle");
+          setStatusText("यह जानकारी अंग्रेज़ी अक्षरों में टाइप करें, ताकि ईमेल या लिंक सही रहे।");
+          return true;
+        }
+        const conversionMode = field.type === "date" || /\b(date|dob|birth)\b/.test(normalizedField)
+          ? "date"
+          : /\b(first.?name|given.?name|last.?name|surname|family.?name|full.?name|name)\b/.test(normalizedField)
+            ? "transliterate"
+            : "translate";
+        try {
+          value = await convertFormAnswerToEnglish({
+            provider: settings.llmProvider,
+            apiKey: settings.llmApiKey,
+            endpoint: settings.llmEndpoint,
+            model: settings.llmModel,
+          }, value, conversionMode);
+          if (/\p{Script=Devanagari}/u.test(value)) {
+            throw new Error("The converted value still contains Devanagari text.");
+          }
+        } catch (conversionError) {
+          console.warn("Hindi form answer conversion failed:", conversionError);
+          setStatus("idle");
+          setStatusText("मैं इसे अंग्रेज़ी में नहीं बदल पाया। कृपया जवाब अंग्रेज़ी अक्षरों में टाइप करें और फिर भेजें।");
+          return true;
+        }
+      }
       let selectedValue = value;
       if (field.kind === "select") {
-        const match = field.options?.find((option) => option.toLowerCase() === value.toLowerCase() || option.toLowerCase().includes(value.toLowerCase()));
+        const match = matchOption(field.options || [], value);
         if (field.options?.length && !match) {
           setStatus("idle");
-          setStatusText(`${translate("Choose one of these options for", "इनमें से विकल्प चुनें:")} ${field.label}: ${field.options.join(", ")}`);
+          setStatusText(`Choose one of these options for ${field.label}: ${field.options.join(", ")}`);
           return true;
         }
         selectedValue = match || value;
@@ -1030,8 +1111,8 @@ export const App: React.FC = () => {
   /**
    * Core Agent Execution Loop
    */
-  const runAgentLoop = async (initialRequest: string) => {
-    if (snips.length > 0) {
+  const runAgentLoop = async (initialRequest: string, resumeExistingTask = false) => {
+    if (!resumeExistingTask && snips.length > 0) {
       await answerFromSnips(initialRequest);
       return;
     }
@@ -1041,16 +1122,16 @@ export const App: React.FC = () => {
     }
 
     isStoppedRef.current = false;
-    setSteps([]);
+    if (!resumeExistingTask) setSteps([]);
     setStatus("thinking");
     setStatusText(translate("Analyzing page...", "पेज का विश्लेषण हो रहा है..."));
 
     // A reply to ask_user continues the original task. New commands start a clean context.
-    const isFollowUp = awaitingUserReplyRef.current && taskGoalRef.current !== null;
+    const isFollowUp = (resumeExistingTask || awaitingUserReplyRef.current) && taskGoalRef.current !== null;
     if (!isFollowUp) {
       taskGoalRef.current = initialRequest;
       conversationRef.current = [{ role: "user" as const, content: initialRequest }];
-    } else {
+    } else if (!resumeExistingTask) {
       conversationRef.current = [...conversationRef.current, { role: "user" as const, content: initialRequest }].slice(-6);
     }
     const taskGoal = taskGoalRef.current || initialRequest;
@@ -1125,7 +1206,7 @@ export const App: React.FC = () => {
       }
     }
 
-    let stepCount = 0;
+    let stepCount = resumeExistingTask ? stepsRef.current.length : 0;
     const MAX_STEPS = 15;
 
     while (stepCount < MAX_STEPS) {
@@ -1153,6 +1234,31 @@ export const App: React.FC = () => {
 
       if (isStoppedRef.current) break;
 
+      // A model may confuse opening the payment page with finishing payment.
+      // Never accept that completion unless the visible snapshot contains a receipt.
+      if (action.action === "done" && isPaymentIntent(taskGoal) && !hasPaymentReceipt(currentSnapshot.summary)) {
+        const continueToPayment = currentSnapshot.interactiveElements.find((element) =>
+          (element.tag === "button" || element.role === "button") &&
+          /continue.{0,30}payment|proceed.{0,20}pay|भुगतान.{0,20}(?:आगे|जारी)/i.test(element.label),
+        );
+
+        if (continueToPayment && !hasVisiblePaymentForm(currentSnapshot)) {
+          action = {
+            action: "click",
+            id: continueToPayment.id,
+            rationale: "Opening the payment page; payment is not complete yet.",
+          };
+        } else {
+          action = {
+            action: "ask_user",
+            question: hasVisiblePaymentForm(currentSnapshot)
+              ? "भुगतान फ़ॉर्म खुला है। कार्ड, UPI या अन्य गोपनीय जानकारी आप स्वयं भरें। भुगतान करना हो तो राशि जाँचकर पुष्टि करें।"
+              : "अभी भुगतान की रसीद दिखाई नहीं दे रही है, इसलिए मैं भुगतान पूरा होने की पुष्टि नहीं कर सकता। क्या आप चाहेंगे कि मैं अगला कदम जारी रखूँ?",
+            rationale: "भुगतान की पुष्टि के लिए रसीद दिखाई देनी चाहिए।",
+          };
+        }
+      }
+
       // 3. Inspect Action Safety
       const safety = inspectActionSafety(action, currentSnapshot);
 
@@ -1173,7 +1279,10 @@ export const App: React.FC = () => {
       }
 
       // SUBMIT / PAYMENT CONFIRMATION GATING
-      if (safety.requiresConfirmation) {
+      const userExplicitlyConfirmedAction =
+        isPaymentIntent(taskGoal) &&
+        /\bconfirm(?:ed)?\b|पुष्टि|कन्फर्म/i.test(initialRequest);
+      if (safety.requiresConfirmation && !userExplicitlyConfirmedAction) {
         setStatus("confirmation");
         const confirmSpeech = safety.safetyAlertSpeech || "Do you want to confirm this action? Say yes to continue.";
         setStatusText(translate("Waiting for confirmation", "पुष्टि की प्रतीक्षा है"));
@@ -1300,26 +1409,65 @@ export const App: React.FC = () => {
     setStatus("executing");
       setStatusText(translate("Executing confirmed action...", "पुष्टि की गई कार्रवाई हो रही है..."));
 
-    const execResponse = await sendTabMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(activeTabId, {
-      type: "BV_EXECUTE_ACTION",
-      action: actionToRun,
-    });
-
-    if (execResponse?.ok) {
-      setSteps((prev) => [
-        ...prev,
-        {
-          stepNumber: prev.length + 1,
-          action: actionToRun,
-          status: "success",
-          spokenSummary: "Confirmation received. The payment was submitted.",
-          timestamp: Date.now(),
-        },
-      ]);
-      await speakStatus("The payment was submitted. The receipt is available on screen.");
-      setStatus("idle");
-      setStatusText(translate("Completed", "पूरा हुआ"));
+    let execResponse: { ok?: boolean; error?: string; result?: { success?: boolean; error?: string }; freshSnapshot?: PageSnapshot } | undefined;
+    try {
+      execResponse = await sendTabMessage(activeTabId, {
+        type: "BV_EXECUTE_ACTION",
+        action: actionToRun,
+      });
+    } catch (error) {
+      execResponse = { ok: false, error: error instanceof Error ? error.message : "The confirmed action could not be completed." };
     }
+
+    if (!execResponse?.ok || execResponse.result?.success === false) {
+      const error = execResponse?.error || execResponse?.result?.error || "The page did not complete the confirmed action.";
+      setSteps((previous) => [...previous, {
+        stepNumber: previous.length + 1,
+        action: actionToRun,
+        status: "failed",
+        details: error,
+        timestamp: Date.now(),
+      }]);
+      await speakStatus(`कार्रवाई पूरी नहीं हुई: ${error}`);
+      setStatus("idle");
+      setStatusText(translate("Action could not be completed", "कार्रवाई पूरी नहीं हो सकी"));
+      awaitingUserReplyRef.current = true;
+      return;
+    }
+
+    const freshSnapshot = execResponse.freshSnapshot || await fetchPageSnapshot(activeTabId);
+    const paymentReceiptVisible = hasPaymentReceipt(freshSnapshot.summary);
+    const actionSummary = paymentReceiptVisible
+      ? "भुगतान की रसीद दिखाई दे रही है। भुगतान की पुष्टि हो गई है।"
+      : "पुष्टि की गई कार्रवाई पूरी हुई। अब अगला कदम जाँच रहा हूँ।";
+    const nextSteps = [...stepsRef.current, {
+      stepNumber: stepsRef.current.length + 1,
+      action: actionToRun,
+      status: "success",
+      spokenSummary: actionSummary,
+      timestamp: Date.now(),
+    }];
+    stepsRef.current = nextSteps;
+    setSteps(nextSteps);
+
+    if (paymentReceiptVisible) {
+      await speakStatus(actionSummary);
+      setStatus("idle");
+      setStatusText(translate("Payment receipt confirmed", "भुगतान की रसीद की पुष्टि हुई"));
+      taskGoalRef.current = null;
+      conversationRef.current = [];
+      awaitingUserReplyRef.current = false;
+      return;
+    }
+
+    conversationRef.current = [...conversationRef.current, {
+      role: "assistant" as const,
+      content: "The confirmed action ran, but no payment receipt is visible yet. Continue by inspecting the current page; do not report payment as complete.",
+    }].slice(-6);
+    setStatus("thinking");
+    setStatusText(translate("Checking the next step...", "अगला कदम देख रहे हैं..."));
+    awaitingUserReplyRef.current = true;
+    await runAgentLoop("", true);
   };
 
   const startVoiceListening = async () => {
@@ -1332,8 +1480,9 @@ export const App: React.FC = () => {
 
     try {
       if (settings.gnaniApiKey) {
+        const speechLanguage = formFillRef.current ? "hi-IN" : settings.languageCode;
         gnaniWsRef.current = new GnaniPrismaWebSocketClient(
-          { apiKey: settings.gnaniApiKey, languageCode: settings.languageCode, sttModel: "prisma-v3.0" },
+          { apiKey: settings.gnaniApiKey, languageCode: speechLanguage, sttModel: "prisma-v3.0" },
           (text) => {
             if (generation === voiceListenGenerationRef.current && voiceSessionActiveRef.current) setTranscript(text);
           },
@@ -1359,7 +1508,7 @@ export const App: React.FC = () => {
             void voiceTurnHandlerRef.current(text);
           }
         },
-        settings.languageCode,
+        formFillRef.current ? "hi-IN" : settings.languageCode,
       );
     } catch (error) {
       voiceSessionActiveRef.current = false;

@@ -36,27 +36,49 @@ window.checkBill = function () {
     return;
   }
 
-  get("summary-consumer-no").textContent = consumerVal;
-  if (get("receipt-consumer")) get("receipt-consumer").textContent = consumerVal;
-  show("section-bill-summary");
-  hide("section-payment");
-  hide("section-receipt");
-  updateSteps(2);
-  window.showToast("Bill found. Please review the details before payment.");
-  scrollToSection("section-bill-summary");
+  const summarySection = document.getElementById("section-bill-summary");
+  const summaryConsumerNo = document.getElementById("summary-consumer-no");
+
+  if (summaryConsumerNo) {
+    summaryConsumerNo.textContent = consumerVal;
+  }
+
+  if (summarySection) {
+    summarySection.classList.remove("hidden");
+    setProgress(2);
+    summarySection.scrollIntoView({ behavior: "smooth" });
+  }
 };
+
+function setProgress(activeStep) {
+  document.querySelectorAll(".payment-progress li").forEach((step, index) => {
+    const number = index + 1;
+    step.classList.toggle("current", number === activeStep);
+    step.classList.toggle("complete", number < activeStep);
+    if (number === activeStep) step.setAttribute("aria-current", "step");
+    else step.removeAttribute("aria-current");
+  });
+}
 
 window.proceedToPayment = function () {
-  show("section-payment");
-  updateSteps(3);
-  scrollToSection("section-payment");
+  const paymentSection = document.getElementById("section-payment");
+  if (paymentSection) {
+    paymentSection.classList.remove("hidden");
+    setProgress(3);
+    paymentSection.scrollIntoView({ behavior: "smooth" });
+  }
 };
 
-window.backToBill = function () {
-  hide("section-payment");
-  updateSteps(2);
-  scrollToSection("section-bill-summary");
-};
+function updatePaymentMethod() {
+  const selected = document.querySelector('input[name="pay_mode"]:checked')?.value || "upi";
+  for (const mode of ["upi", "card", "netbanking"]) {
+    document.getElementById(`payment-fields-${mode}`)?.classList.toggle("hidden", selected !== mode);
+  }
+  document.querySelectorAll(".payment-option").forEach((option) => {
+    const radio = option.querySelector('input[name="pay_mode"]');
+    option.classList.toggle("selected", Boolean(radio?.checked));
+  });
+}
 
 window.submitPayment = function () {
   hide("section-payment");
@@ -74,26 +96,31 @@ window.submitPayment = function () {
 };
 
 window.resetPortal = function () {
-  hide("section-payment");
-  hide("section-bill-summary");
-  hide("section-receipt");
-  show("section-lookup");
-  get("form-bill-lookup")?.reset();
-  get("form-payment")?.reset();
-  document.querySelectorAll(".method-card").forEach((card, index) => card.classList.toggle("selected", index === 0));
-  updateSteps(1);
-  scrollToSection("section-lookup");
+  const paymentSection = document.getElementById("section-payment");
+  const summarySection = document.getElementById("section-bill-summary");
+  const lookupSection = document.getElementById("section-lookup");
+  const receiptSection = document.getElementById("section-receipt");
+
+  if (paymentSection) paymentSection.classList.add("hidden");
+  if (summarySection) summarySection.classList.add("hidden");
+  if (receiptSection) receiptSection.classList.add("hidden");
+  if (lookupSection) {
+    lookupSection.classList.remove("hidden");
+    setProgress(1);
+    lookupSection.scrollIntoView({ behavior: "smooth" });
+  }
 };
 
-document.addEventListener("DOMContentLoaded", () => {
-  document.querySelectorAll(".method-card input[type='radio']").forEach((input) => {
-    input.addEventListener("change", () => {
-      document.querySelectorAll(".method-card").forEach((card) => card.classList.remove("selected"));
-      input.closest(".method-card")?.classList.add("selected");
-    });
-  });
-
-  get("consumer-num")?.addEventListener("input", (event) => {
-    event.target.value = event.target.value.replace(/\D/g, "").slice(0, 12);
-  });
+document.getElementById("form-bill-lookup")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  window.checkBill();
 });
+
+document.getElementById("btn-proceed-pay")?.addEventListener("click", window.proceedToPayment);
+document.querySelectorAll('input[name="pay_mode"]').forEach((radio) => radio.addEventListener("change", updatePaymentMethod));
+updatePaymentMethod();
+document.getElementById("form-payment")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  window.submitPayment();
+});
+document.getElementById("btn-return-home")?.addEventListener("click", window.resetPortal);

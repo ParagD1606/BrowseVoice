@@ -19,6 +19,7 @@ import {
   isStopCommand,
   isConfirmationCommand,
 } from "../lib/safety.ts";
+import { hasPaymentReceipt } from "../lib/payment-state.ts";
 
 // Synthetic initial Page Snapshot of BijliSeva Mock Portal
 const MOCK_PORTAL_LOOKUP_SNAPSHOT = {
@@ -256,6 +257,7 @@ test("Command 10: 'ha payment confirm karo' (Hindi/Hinglish Confirmation) -> con
   assert.equal(isConfirmationCommand("ha payment confirm karo"), true);
   assert.equal(isConfirmationCommand("haan"), true);
   assert.equal(isConfirmationCommand("yes"), true);
+  assert.equal(isConfirmationCommand("bill bharo"), false, "A payment request is not itself confirmation");
 
   const action = await planner.plan({
     userRequest: "ha payment confirm karo",
@@ -270,6 +272,39 @@ test("Command 10: 'ha payment confirm karo' (Hindi/Hinglish Confirmation) -> con
   const safety = inspectActionSafety(action, MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT);
   assert.equal(safety.permitted, true);
   assert.equal(safety.requiresConfirmation, true, "Consequential payment action MUST require confirmation");
+});
+
+test("Payment form is not reported complete and asks the user to handle sensitive details", async () => {
+  const action = await planner.plan({
+    userRequest: "bill bharo",
+    snapshot: MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT,
+    history: [],
+  });
+
+  assert.equal(action.action, "ask_user");
+  assert.match(action.question, /स्वयं भरें/);
+  assert.equal(hasPaymentReceipt(MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT.summary), false);
+});
+
+test("payment completion requires visible receipt evidence, not a success word alone", () => {
+  assert.equal(hasPaymentReceipt("Payment Successful"), false);
+  assert.equal(hasPaymentReceipt("Payment Gateway | Payment Successful | Visible payment receipt: Transaction ID present."), true);
+});
+
+test("the latest follow-up is retained when the mock planner handles payment confirmation", async () => {
+  const action = await planner.plan({
+    userRequest: "bill bharo",
+    snapshot: MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT,
+    history: [],
+    conversation: [
+      { role: "user", content: "bill bharo" },
+      { role: "assistant", content: "Fill payment details yourself." },
+      { role: "user", content: "confirm payment" },
+    ],
+  });
+
+  assert.equal(action.action, "click");
+  assert.equal(action.id, 10);
 });
 
 test("Safety Rule Verification: Sensitive Field Typing Blocked", () => {

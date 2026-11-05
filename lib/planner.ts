@@ -12,6 +12,7 @@ import {
   type PlannerAction,
 } from "./schema.ts";
 import type { PageSnapshot, InteractiveElement } from "./safety.ts";
+import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "./payment-state.ts";
 
 export interface StepLogEntry {
   stepNumber: number;
@@ -41,6 +42,62 @@ export interface LLMConfig {
   endpoint?: string; // e.g. https://api.openai.com/v1 or https://openrouter.ai/api/v1
   apiKey?: string;
   model?: string; // e.g. gemini-3.8-flash, gpt-4o-mini, deepseek-chat
+}
+
+/** Convert a Hindi form answer to English text while preserving the user's facts. */
+export async function convertFormAnswerToEnglish(
+  config: LLMConfig,
+  answer: string,
+  mode: "translate" | "transliterate" | "date",
+): Promise<string> {
+  const instruction = mode === "transliterate"
+    ? "Transliterate the Hindi personal name into commonly used English letters. Do not translate its meaning or add anything."
+    : mode === "date"
+      ? "Convert the Hindi date to YYYY-MM-DD. If the date is ambiguous, return the original answer unchanged. Return only the date."
+      : "Translate the Hindi answer into concise natural English. Preserve names, numbers, dates, identifiers, and factual meaning. Do not infer missing information or add anything.";
+  const prompt = `${instruction}\nReturn only the converted text.\n\nHindi answer: ${answer}`;
+
+  if (!config.apiKey || config.provider === "mock") {
+    throw new Error("Hindi-to-English conversion needs a configured Gemini or OpenAI-compatible model.");
+  }
+
+  if (config.provider === "gemini") {
+    const model = config.model || "gemini-3.8-flash";
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: "You are a precise Hindi-to-English form assistant. Never change factual details." }] },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 128 },
+      }),
+    });
+    if (!response.ok) throw new Error(`Gemini conversion failed (${response.status}).`);
+    const data = await response.json();
+    const converted = data?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || "").join("").trim();
+    if (!converted) throw new Error("The model returned no converted text.");
+    return converted;
+  }
+
+  const endpoint = (config.endpoint || "https://api.openai.com/v1").replace(/\/$/, "");
+  const response = await fetch(`${endpoint}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
+    body: JSON.stringify({
+      model: config.model || "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are a precise Hindi-to-English form assistant. Never change factual details." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0,
+      max_tokens: 128,
+    }),
+  });
+  if (!response.ok) throw new Error(`LLM conversion failed (${response.status}).`);
+  const data = await response.json();
+  const converted = data?.choices?.[0]?.message?.content?.trim();
+  if (!converted || typeof converted !== "string") throw new Error("The model returned no converted text.");
+  return converted;
 }
 
 export interface SnipContext {
@@ -182,6 +239,8 @@ RULES:
 3. NEVER type into sensitive fields (passwords, OTPs, CVVs, Aadhaar). If a sensitive field is required, ask the user to fill it manually using ask_user.
 4. Keep the rationale short (1 short sentence) in Hindi or Hinglish so it can be spoken via Text-to-Speech.
 5. If the user's goal is accomplished on the current screen, return action "done".
+   For payment tasks, NEVER claim payment is complete unless the currently visible page shows a successful payment receipt with a transaction ID. A payment form or a "continue to payment" page is not completion.
+   Never click, read, or fill card, CVV, OTP, password, or other sensitive payment fields. Ask the user to handle those fields manually.
 6. Output raw JSON only with NO markdown wrappers or extra commentary.`;
 
 /**
@@ -450,15 +509,16 @@ export class MockRuleBasedPlanner implements PlannerProvider {
   readonly name = "Mock / Rule-Based Planner (Demo & Tests)";
 
   public async plan(request: PlannerRequest): Promise<PlannerAction> {
-    const req = request.userRequest.toLowerCase();
+    const latestUserRequest = [...(request.conversation || [])]
+      .reverse()
+      .find((message) => message.role === "user")?.content || request.userRequest;
+    const req = `${request.userRequest} ${latestUserRequest}`.toLowerCase();
     const elements = request.snapshot.interactiveElements;
     const history = request.history || [];
 
     // 1. Explicit Confirmation Step: "ha", "yes", "confirm payment"
-    if (
-      (req.includes("ha") || req.includes("haan") || req.includes("yes") || req.includes("confirm")) &&
-      (req.includes("confirm") || req.includes("payment") || req.includes("bharo") || req.includes("pay"))
-    ) {
+    const latestUserExplicitlyConfirmed = /\b(?:yes|haan|ha|haa|confirm(?:ed)?|approve|proceed)\b|हाँ|हां|पुष्टि/i.test(latestUserRequest);
+    if (latestUserExplicitlyConfirmed && isPaymentIntent(req)) {
       const payConfirmBtn = elements.find(
         (el) =>
           (el.tag === "button" || el.type === "submit") &&
@@ -477,15 +537,25 @@ export class MockRuleBasedPlanner implements PlannerProvider {
     }
 
     // 2. Already on receipt / confirmation page
-    if (
-      request.snapshot.summary.toLowerCase().includes("success") ||
-      request.snapshot.summary.toLowerCase().includes("सफल") ||
-      request.snapshot.summary.toLowerCase().includes("receipt")
-    ) {
+    if (hasPaymentReceipt(request.snapshot.summary)) {
       return {
         action: "done",
         summary: "The electricity bill payment was completed successfully. The receipt is available on screen.",
         rationale: "Payment completed successfully.",
+      };
+    }
+
+    // Do not treat opening the payment page as completing a payment. The user
+    // must enter sensitive details themselves and explicitly request the final submit.
+    const paySubmitButton = elements.find((el) =>
+      (el.tag === "button" || el.role === "button" || el.type === "submit") &&
+      /\bpay\b|भुगतान/i.test(el.label),
+    );
+    if (isPaymentIntent(req) && hasVisiblePaymentForm(request.snapshot) && paySubmitButton) {
+      return {
+        action: "ask_user",
+        question: "भुगतान फ़ॉर्म खुला है। कार्ड, UPI या अन्य गोपनीय जानकारी आप स्वयं भरें। राशि जाँचने के बाद, अगर भुगतान करना चाहते हैं, तो कहें ‘भुगतान की पुष्टि करें’।",
+        rationale: "गोपनीय भुगतान जानकारी आपको स्वयं भरनी होगी।",
       };
     }
 
@@ -504,12 +574,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
     }
 
     // 4. Pay / Proceed to Payment Intent ("bill bharo", "pay electricity bill", "proceed to payment")
-    const isPayOrProceed =
-      req.includes("bharo") ||
-      req.includes("pay") ||
-      req.includes("chukaao") ||
-      req.includes("proceed") ||
-      req.includes("payment");
+    const isPayOrProceed = isPaymentIntent(req);
 
     if (isPayOrProceed) {
       const proceedBtn = elements.find(
