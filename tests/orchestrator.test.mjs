@@ -36,6 +36,7 @@ class FakeBrowser {
     this.tabs = new Map([[10, { id: 10, url: "https://active.test/", title: "Active" }]]);
     this.created = [];
     this.executions = [];
+    this.deactivations = [];
     this.inFlightMessages = 0;
     this.maxInFlightMessages = 0;
   }
@@ -68,6 +69,10 @@ class FakeBrowser {
         await wait(15);
         this.executions.push({ tabId, action: message.action });
         return { ok: true, freshSnapshot: page(tabId, `updated by ${message.action.action}`) };
+      }
+      if (message.type === "BV_DEACTIVATE_AGENT") {
+        this.deactivations.push(tabId);
+        return { ok: true };
       }
       return { ok: true };
     } finally {
@@ -271,6 +276,37 @@ test("planner rate-limit errors are retried centrally without duplicating browse
   assert.equal(browser.created.length, 0);
   assert.equal(orchestrator.memory.snapshot().tabs.length, 1);
   assert.equal(orchestrator.memory.snapshot().subtasks[0].status, "completed");
+});
+
+test("Stop cancels in-flight workers and deactivates every managed tab", async () => {
+  const browser = new FakeBrowser();
+  let releasePlanner;
+  const plannerStarted = new Promise((resolve) => {
+    releasePlanner = resolve;
+  });
+  const planner = {
+    async plan() {
+      await plannerStarted;
+      return { action: "click", targetId: 1, rationale: "Late action must be ignored after Stop." };
+    },
+  };
+  const orchestrator = makeOrchestrator(browser, planner);
+  await orchestrator.start("stop the agent", {
+    activeTabId: 10,
+    subtasks: [{ id: "stop-test", title: "Stop test", instruction: "inspect the page" }],
+  });
+  await waitFor(() => orchestrator.memory.snapshot().subtasks[0]?.status === "inspecting");
+
+  const stopPromise = orchestrator.stop(false);
+  await waitFor(() => orchestrator.memory.snapshot().status === "cancelled");
+  releasePlanner();
+  await stopPromise;
+  await wait(30);
+
+  assert.equal(browser.executions.length, 0, "a planner result that returns after Stop must not execute");
+  assert.deepEqual(browser.deactivations, [10]);
+  assert.equal(orchestrator.memory.snapshot().subtasks[0].status, "cancelled");
+  assert.equal(browser.tabs.has(10), true, "Stop should leave the user's tab open");
 });
 
 test("worker findings are visible in the next worker planning request", async () => {

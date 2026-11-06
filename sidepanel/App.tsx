@@ -569,13 +569,10 @@ export const App: React.FC = () => {
     conversationRef.current = [];
     awaitingUserReplyRef.current = false;
     formFillRef.current = null;
-    void orchestratorRef.current?.stop(false);
-
-    // Notify tab content script to remove indicator
-    if (activeTabId) {
-      chrome.tabs.sendMessage(activeTabId, { type: "BV_DEACTIVATE_AGENT" }).catch(() => {});
-    }
-  }, [activeTabId]);
+    void orchestratorRef.current?.stop(false).catch((error) => {
+      console.warn("Could not fully stop the autonomous agent", error);
+    });
+  }, []);
 
   const sendTabMessage = async <T,>(tabId: number, message: Record<string, unknown>): Promise<T> => {
     try {

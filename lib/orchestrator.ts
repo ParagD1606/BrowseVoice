@@ -635,6 +635,7 @@ export class AutonomousOrchestrator {
   private readonly activeWorkers = new Set<string>();
   private readonly claimedTabIds = new Set<number>();
   private initialized = false;
+  private generation = 0;
 
   constructor(dependencies: OrchestratorDependencies) {
     this.dependencies = dependencies;
@@ -661,6 +662,8 @@ export class AutonomousOrchestrator {
     if (current.status === "running" || current.status === "waiting") {
       throw new Error("Browse Voice already has an autonomous task in progress.");
     }
+    const generation = ++this.generation;
+    this.activeWorkers.clear();
     this.claimedTabIds.clear();
     if (["failed", "completed", "cancelled"].includes(current.status)) {
       await Promise.all(current.tabs
@@ -679,7 +682,7 @@ export class AutonomousOrchestrator {
     initial.status = "running";
     await this.memory.replace(initial, "orchestrator", "task-started");
     const startingTabId = options.activeTabId ?? (await this.dependencies.browser.getActiveTab())?.id;
-    await this.schedule(startingTabId);
+    await this.schedule(startingTabId, generation);
     return this.memory.snapshot();
   }
 
@@ -748,6 +751,9 @@ export class AutonomousOrchestrator {
     await this.initialize();
     const state = this.memory.snapshot();
     if (state.status !== "running" && state.status !== "waiting") return state;
+    const generation = ++this.generation;
+    this.activeWorkers.clear();
+    this.claimedTabIds.clear();
     for (const tab of state.tabs.filter((candidate) => candidate.status === "active" || candidate.status === "opening")) {
       const exists = await this.dependencies.browser.getTab(tab.tabId).catch(() => undefined);
       if (!exists) await this.handleTabRemoved(tab.tabId, "The browser tab was unavailable after recovery.");
@@ -763,18 +769,23 @@ export class AutonomousOrchestrator {
       next.status = "running";
     });
     const startingTabId = options.activeTabId ?? (await this.dependencies.browser.getActiveTab())?.id;
-    await this.schedule(startingTabId);
+    await this.schedule(startingTabId, generation);
     return this.memory.snapshot();
   }
 
   public async stop(closeAgentTabs = false): Promise<SharedTaskMemory> {
     await this.initialize();
+    ++this.generation;
+    this.activeWorkers.clear();
+    this.claimedTabIds.clear();
+    const managedTabs = this.memory.snapshot().tabs.filter((tab) => tab.status !== "closed");
     await this.memory.commit("user", "task-cancelled", "User stopped the autonomous task.", (state) => {
       state.status = "cancelled";
       state.subtasks.forEach((subtask) => {
         if (!["completed", "failed", "cancelled"].includes(subtask.status)) subtask.status = "cancelled";
       });
     });
+    await Promise.all(managedTabs.map((tab) => this.dependencies.browser.sendMessage(tab.tabId, { type: "BV_DEACTIVATE_AGENT" }).catch(() => undefined)));
     if (closeAgentTabs) {
       await Promise.all(this.memory.snapshot().tabs.filter((tab) => tab.createdByAgent && tab.status !== "closed").map(async (tab) => {
         await this.dependencies.browser.removeTab(tab.tabId).catch(() => undefined);
@@ -796,7 +807,7 @@ export class AutonomousOrchestrator {
         if (state.status === "completed" || state.status === "idle") state.status = "running";
       }
     });
-    await this.schedule(activeTabId);
+    await this.schedule(activeTabId, this.generation);
     return this.memory.snapshot();
   }
 
@@ -833,7 +844,7 @@ export class AutonomousOrchestrator {
         }
       });
     }
-    await this.schedule();
+    await this.schedule(undefined, this.generation);
     return this.memory.snapshot();
   }
 
@@ -881,7 +892,8 @@ export class AutonomousOrchestrator {
     });
   }
 
-  private async schedule(activeTabId?: number): Promise<void> {
+  private async schedule(activeTabId?: number, generation = this.generation): Promise<void> {
+    if (generation !== this.generation) return;
     const state = this.memory.snapshot();
     if (state.status === "cancelled" || state.status === "completed" || state.status === "failed") return;
     const completed = new Set(state.subtasks.filter((subtask) => subtask.status === "completed").map((subtask) => subtask.id));
@@ -896,7 +908,7 @@ export class AutonomousOrchestrator {
           }
         });
       });
-      await this.schedule(activeTabId);
+      await this.schedule(activeTabId, generation);
       return;
     }
     const ready = state.subtasks.filter((subtask) => subtask.status === "pending" && subtask.dependsOn.every((dependency) => completed.has(dependency)));
@@ -904,16 +916,17 @@ export class AutonomousOrchestrator {
     ready.slice(0, available).forEach((subtask) => {
       const workerId = subtask.workerId || createId("worker");
       this.activeWorkers.add(workerId);
-      void this.launchWorker(subtask.id, workerId, activeTabId);
+      void this.launchWorker(subtask.id, workerId, activeTabId, generation);
     });
     if (ready.length === 0 && this.activeWorkers.size === 0) {
       await this.finishIfSettled();
     }
   }
 
-  private async launchWorker(subtaskId: string, workerId: string, activeTabId?: number): Promise<void> {
+  private async launchWorker(subtaskId: string, workerId: string, activeTabId: number | undefined, generation: number): Promise<void> {
     let tabId: number | undefined;
     try {
+      if (generation !== this.generation) return;
       const current = this.memory.snapshot();
       const subtask = current.subtasks.find((candidate) => candidate.id === subtaskId);
       if (!subtask) return;
@@ -926,6 +939,10 @@ export class AutonomousOrchestrator {
       const reusedAssignedTab = assignedTab ? await this.dependencies.browser.getTab(assignedTab.tabId).catch(() => undefined) : undefined;
       const tab = reusedAssignedTab || existing || await this.dependencies.browser.createTab({ url: subtask.startUrl || "about:blank", active: false });
       tabId = tab.id;
+      if (generation !== this.generation) {
+        if (!reusedAssignedTab && !existing) await this.dependencies.browser.removeTab(tab.id).catch(() => undefined);
+        return;
+      }
       await this.memory.commit(workerId, "worker-started", `${subtask.title} started in tab ${tabId}.`, (state) => {
         const tracked = state.subtasks.find((candidate) => candidate.id === subtaskId);
         if (tracked) {
@@ -958,20 +975,23 @@ export class AutonomousOrchestrator {
         });
         await this.dependencies.browser.updateTab(tabId, { url: subtask.startUrl });
       }
-      await this.runWorker(subtaskId, workerId, tabId);
+      await this.runWorker(subtaskId, workerId, tabId, generation);
     } catch (error) {
-      await this.failWorker(subtaskId, error instanceof Error ? error.message : "Worker failed.", true);
+      if (generation === this.generation) {
+        await this.failWorker(subtaskId, error instanceof Error ? error.message : "Worker failed.", true);
+      }
     } finally {
       this.activeWorkers.delete(workerId);
-      await this.schedule(activeTabId);
+      if (generation === this.generation) await this.schedule(activeTabId, generation);
     }
   }
 
-  private async runWorker(subtaskId: string, workerId: string, tabId: number): Promise<void> {
+  private async runWorker(subtaskId: string, workerId: string, tabId: number, generation: number): Promise<void> {
     const planner = this.dependencies.createPlanner();
     const history: StepLogEntry[] = [];
     let snapshot: PageSnapshot | undefined;
     for (let step = 1; step <= this.maxStepsPerWorker; step += 1) {
+      if (generation !== this.generation) return;
       const state = this.memory.snapshot();
       const subtask = state.subtasks.find((candidate) => candidate.id === subtaskId);
       if (!subtask || subtask.status === "cancelled") return;
@@ -1016,6 +1036,7 @@ export class AutonomousOrchestrator {
           sharedMemoryContext: formatSharedMemoryForWorker(this.memory.snapshot(), workerId),
         };
         let action = protectPlannerAction(plannerRequest, await this.llmScheduler.schedule(() => planner.plan(plannerRequest)));
+        if (generation !== this.generation) return;
         const safety = inspectActionSafety(action, snapshot);
         if (!safety.permitted) {
           await this.failWorker(subtaskId, safety.reason || "Safety policy blocked the worker action.", false);
@@ -1076,6 +1097,7 @@ export class AutonomousOrchestrator {
           continue;
         }
 
+        if (generation !== this.generation) return;
         let execution: { ok?: boolean; error?: string; freshSnapshot?: PageSnapshot };
         if (action.action === "navigate") {
           if (!safeWebUrl(action.url)) {
@@ -1109,7 +1131,7 @@ export class AutonomousOrchestrator {
           });
         }
       } catch (error) {
-        await this.failWorker(subtaskId, error instanceof Error ? error.message : "Worker execution failed.", true);
+        if (generation === this.generation) await this.failWorker(subtaskId, error instanceof Error ? error.message : "Worker execution failed.", true);
         return;
       }
     }
