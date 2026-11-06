@@ -14,6 +14,12 @@ import { cleanSnippetLines, cleanSnippetText } from "../lib/snips";
 
 let indicatorElement: HTMLElement | null = null;
 let agentActive = false;
+let lastStoppedSession = 0;
+
+function isAgentSessionAllowed(sessionId: unknown): boolean {
+  if (typeof sessionId !== "number" || !Number.isFinite(sessionId)) return true;
+  return sessionId > lastStoppedSession;
+}
 
 interface SnipSelectionResult {
   rect: { x: number; y: number; width: number; height: number };
@@ -192,12 +198,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     case "BV_ACTIVATE_AGENT": {
+      if (!isAgentSessionAllowed(message.sessionId)) {
+        sendResponse({ ok: false, active: false, error: "This Browse Voice session has been stopped." });
+        return true;
+      }
       showActiveIndicator(message.statusText || "Active");
       sendResponse({ ok: true });
       return true;
     }
 
     case "BV_DEACTIVATE_AGENT": {
+      if (typeof message.sessionId === "number" && Number.isFinite(message.sessionId)) {
+        lastStoppedSession = Math.max(lastStoppedSession, message.sessionId);
+      }
       hideActiveIndicator();
       sendResponse({ ok: true });
       return true;
@@ -211,8 +224,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     case "BV_GET_SNAPSHOT": {
-      if (!agentActive) {
-        showActiveIndicator("Observing");
+      if (!isAgentSessionAllowed(message.sessionId)) {
+        sendResponse({ ok: false, error: "This Browse Voice session has been stopped." });
+        return true;
       }
       try {
         const snapshot = capturePageSnapshot();
@@ -227,6 +241,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const action = message.action as PlannerAction;
       if (!action) {
         sendResponse({ ok: false, error: "Missing action in request." });
+        return true;
+      }
+      if (!isAgentSessionAllowed(message.sessionId)) {
+        sendResponse({ ok: false, error: "This Browse Voice session has been stopped." });
         return true;
       }
 
