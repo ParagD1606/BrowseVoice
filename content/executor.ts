@@ -7,6 +7,7 @@
  * - select(id, value)
  * - scroll(direction, amount)
  * - navigate(url)
+ * - press_key(id, key)
  *
  * Then waits for the page to settle before capturing the next observation.
  */
@@ -260,6 +261,31 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
           settled: true,
           waitedMs: 0,
         };
+      }
+
+      case "press_key": {
+        const el = getElementById(action.id);
+        if (!el) {
+          return { success: false, action, error: `Element ID [${action.id}] was not found in the current page.`, settled: true, waitedMs: 0 };
+        }
+        const sensitivity = detectSensitiveField({
+          type: el instanceof HTMLInputElement ? el.type : undefined,
+          name: el.getAttribute("name") || el.id,
+          id: el.id,
+          label: el.getAttribute("aria-label") || undefined,
+        });
+        if (sensitivity.isSensitive) {
+          return { success: false, action, error: `Safety Violation Blocked: Target element is sensitive (${sensitivity.reason}).`, settled: true, waitedMs: 0 };
+        }
+        flashElementHighlight(el);
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.focus();
+        const key = action.key;
+        el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+        el.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
+        if (key === "Enter" && el instanceof HTMLInputElement && el.form) el.form.requestSubmit();
+        const settle = await waitForPageSettle();
+        return { success: true, action, settled: settle.settled, waitedMs: settle.waitedMs };
       }
 
       case "ask_user":

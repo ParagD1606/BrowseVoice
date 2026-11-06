@@ -152,7 +152,7 @@ export function inspectActionSafety(
   safetyAlertSpeech?: string;
 } {
   // Check action targeting an element
-  if (action.action === "type" || action.action === "click" || action.action === "select") {
+  if (action.action === "type" || action.action === "click" || action.action === "select" || action.action === "press_key") {
     const target = snapshot.interactiveElements.find((el) => el.id === action.id);
 
     if (!target) {
@@ -164,7 +164,7 @@ export function inspectActionSafety(
     }
 
     // MANDATORY RULE 1: Never type into sensitive fields
-    if (action.action === "type" && target.isSensitive) {
+    if ((action.action === "type" || action.action === "press_key") && target.isSensitive) {
       return {
         permitted: false,
         requiresConfirmation: false,

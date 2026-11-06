@@ -36,6 +36,8 @@ class FakeBrowser {
     this.tabs = new Map([[10, { id: 10, url: "https://active.test/", title: "Active" }]]);
     this.created = [];
     this.executions = [];
+    this.inFlightMessages = 0;
+    this.maxInFlightMessages = 0;
   }
 
   async getActiveTab() { return this.tabs.get(10); }
@@ -55,10 +57,59 @@ class FakeBrowser {
   async removeTab(tabId) { this.tabs.delete(tabId); }
   async sendMessage(tabId, message) {
     if (!this.tabs.has(tabId)) throw new Error(`Tab ${tabId} is closed.`);
-    if (message.type === "BV_GET_SNAPSHOT") return { ok: true, snapshot: page(tabId) };
+    this.inFlightMessages += 1;
+    this.maxInFlightMessages = Math.max(this.maxInFlightMessages, this.inFlightMessages);
+    try {
+      if (message.type === "BV_GET_SNAPSHOT") {
+        await wait(15);
+        return { ok: true, snapshot: page(tabId) };
+      }
+      if (message.type === "BV_EXECUTE_ACTION") {
+        await wait(15);
+        this.executions.push({ tabId, action: message.action });
+        return { ok: true, freshSnapshot: page(tabId, `updated by ${message.action.action}`) };
+      }
+      return { ok: true };
+    } finally {
+      this.inFlightMessages -= 1;
+    }
+  }
+}
+
+class SearchBrowser extends FakeBrowser {
+  constructor() {
+    super();
+    this.searchState = new Map();
+  }
+
+  async sendMessage(tabId, message) {
+    if (!this.tabs.has(tabId)) throw new Error(`Tab ${tabId} is closed.`);
+    const state = this.searchState.get(tabId) || { query: "", submitted: false };
+    this.searchState.set(tabId, state);
+    if (message.type === "BV_GET_SNAPSHOT") {
+      return {
+        ok: true,
+        snapshot: {
+          url: this.tabs.get(tabId).url,
+          title: state.submitted ? "Search results" : "Search page",
+          summary: state.submitted ? `Results for ${state.query}` : "Search page",
+          interactiveElements: [
+            { id: 1, tag: "input", role: "searchbox", label: "Search", type: "search", value: state.query, isSensitive: false },
+            { id: 2, tag: "button", role: "button", label: "Search", isSensitive: false },
+          ],
+          timestamp: Date.now(),
+        },
+      };
+    }
     if (message.type === "BV_EXECUTE_ACTION") {
-      this.executions.push({ tabId, action: message.action });
-      return { ok: true, freshSnapshot: page(tabId, `updated by ${message.action.action}`) };
+      const action = message.action;
+      if (action.action === "type") state.query = action.text;
+      if (action.action === "click" || action.action === "press_key") {
+        state.submitted = true;
+        this.tabs.get(tabId).url = `${this.tabs.get(tabId).url}?q=${encodeURIComponent(state.query)}`;
+      }
+      this.executions.push({ tabId, action });
+      return { ok: true, freshSnapshot: (await this.sendMessage(tabId, { type: "BV_GET_SNAPSHOT" })).snapshot };
     }
     return { ok: true };
   }
@@ -122,6 +173,40 @@ test("a direct new-tab request bypasses decomposition and opens exactly one tab"
   assert.equal(plannerCalls, 0);
 });
 
+test("a new task cleans up agent tabs left by a previous terminal task", async () => {
+  const browser = new FakeBrowser();
+  browser.tabs.set(99, { id: 99, url: "https://stale.example", title: "Stale worker" });
+  const previous = createInitialTaskMemory("previous task");
+  previous.status = "failed";
+  previous.tabs.push({ tabId: 99, workerId: "old-worker", subtaskId: "old-task", createdByAgent: true, status: "active", url: "https://stale.example", lastUpdatedAt: Date.now() });
+  const orchestrator = new AutonomousOrchestrator({
+    browser,
+    persistence: { load: async () => previous, save: async () => {} },
+    createPlanner: () => ({ id: "test", name: "test", async plan() { return { action: "done", summary: "unexpected" }; } }),
+  });
+  await orchestrator.start("open a fresh site in new tab");
+  assert.equal(browser.tabs.has(99), false);
+  assert.equal(browser.created.length, 1);
+});
+
+test("equivalent action-level subtasks merge into one end-to-end workflow per destination", () => {
+  const state = createInitialTaskMemory("search the same query on two sources", [
+    { id: "one-open", title: "Search on Source One", instruction: "Search on Source One", startUrl: "https://www.one.example" },
+    { id: "one-query", title: "Search for lucky man on Source One", instruction: "Search for lucky man on Source One", startUrl: "https://one.example", searchQuery: "lucky man" },
+    { id: "two", title: "Search for lucky man on Source Two", instruction: "Search for lucky man on Source Two", startUrl: "https://two.example", searchQuery: "lucky man" },
+  ]);
+  assert.equal(state.subtasks.length, 2);
+  assert.equal(state.subtasks.find((subtask) => subtask.startUrl.includes("one.example")).searchQuery, "lucky man");
+});
+
+test("one explicit query in the global objective is shared by workflows that omit it", () => {
+  const state = createInitialTaskMemory("open two sources and search lucky man in both", [
+    { id: "one", title: "Search on Source One", instruction: "Search on Source One", startUrl: "https://one.example" },
+    { id: "two", title: "Search on Source Two", instruction: "Search on Source Two", startUrl: "https://two.example" },
+  ]);
+  assert.deepEqual(state.subtasks.map((subtask) => subtask.searchQuery), ["lucky man", "lucky man"]);
+});
+
 test("three independent subtasks open tabs and execute concurrently", async () => {
   const browser = new FakeBrowser();
   const planner = new ParallelPlanner();
@@ -138,9 +223,54 @@ test("three independent subtasks open tabs and execute concurrently", async () =
   const state = orchestrator.memory.snapshot();
   assert.equal(state.subtasks.filter((subtask) => subtask.status === "completed").length, 3);
   assert.equal(state.tabs.length, 3);
-  assert.equal(browser.created.length, 2);
-  assert.ok(planner.maxInFlight > 1, "workers must overlap instead of running serially");
+  assert.equal(browser.created.length, 3);
+  assert.ok(browser.maxInFlightMessages > 1, "browser workers must overlap instead of running serially");
   assert.match(state.finalResponse, /Product [ABC]/);
+});
+
+test("structured search workflows execute and verify without planner calls", async () => {
+  const browser = new SearchBrowser();
+  let plannerCalls = 0;
+  const orchestrator = new AutonomousOrchestrator({
+    browser,
+    persistence: { load: async () => null, save: async () => {} },
+    createPlanner: () => ({ id: "test", name: "test", async plan() { plannerCalls += 1; return { action: "done", summary: "unexpected planner use" }; } }),
+  });
+  await orchestrator.start("open two sources and search for lucky man in both", {
+    subtasks: [
+      { id: "one", title: "Source one search", instruction: "Search for lucky man on source one", startUrl: "https://one.example", searchQuery: "lucky man", expectedOutcome: "Search results visible" },
+      { id: "two", title: "Source two search", instruction: "Search for lucky man on source two", startUrl: "https://two.example", searchQuery: "lucky man", expectedOutcome: "Search results visible" },
+    ],
+  });
+  await waitFor(() => orchestrator.memory.snapshot().status === "completed");
+  const state = orchestrator.memory.snapshot();
+  assert.equal(state.subtasks.length, 2);
+  assert.equal(state.subtasks.filter((subtask) => subtask.status === "completed").length, 2);
+  assert.equal(browser.created.length, 2);
+  assert.equal(plannerCalls, 0);
+  assert.equal(browser.executions.filter(({ action }) => action.action === "type").length, 2);
+  assert.deepEqual(browser.executions.filter(({ action }) => action.action === "type").map(({ action }) => action.text), ["lucky man", "lucky man"]);
+  assert.equal(state.findings.filter((finding) => finding.title.includes("search result")).length, 2);
+});
+
+test("planner rate-limit errors are retried centrally without duplicating browser work", async () => {
+  const browser = new FakeBrowser();
+  let plannerCalls = 0;
+  const orchestrator = new AutonomousOrchestrator({
+    browser,
+    persistence: { load: async () => null, save: async () => {} },
+    createPlanner: () => ({ id: "test", name: "test", async plan() {
+      plannerCalls += 1;
+      if (plannerCalls === 1) throw new Error("LLM API returned 429: retry_after 0.01s");
+      return { action: "done", summary: "Recovered and completed." };
+    } }),
+  });
+  await orchestrator.start("inspect one page", { activeTabId: 10, maxLlmRetries: 1, subtasks: [{ id: "one", title: "One", instruction: "inspect one" }] });
+  await waitFor(() => orchestrator.memory.snapshot().status === "completed");
+  assert.equal(plannerCalls, 2);
+  assert.equal(browser.created.length, 0);
+  assert.equal(orchestrator.memory.snapshot().tabs.length, 1);
+  assert.equal(orchestrator.memory.snapshot().subtasks[0].status, "completed");
 });
 
 test("worker findings are visible in the next worker planning request", async () => {
