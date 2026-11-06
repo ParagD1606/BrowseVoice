@@ -41,6 +41,14 @@ import {
   mergeTranscriptsPreservingIdentifiers,
   resolveFormValue,
 } from "../lib/form-values";
+import {
+  AutonomousOrchestrator,
+  createChromeMemoryPersistence,
+  decomposeTask,
+  summarizeTask,
+  type BrowserTabAdapter,
+  type SharedTaskMemory,
+} from "../lib/orchestrator";
 import { MicrophoneSession } from "./mic";
 import {
   askSiteQuestion,
@@ -390,6 +398,7 @@ export const App: React.FC = () => {
   const [siteChatMessages, setSiteChatMessages] = useState<ChatMessage[]>([]);
   const [siteSafety, setSiteSafety] = useState<SiteSafetyResult | null>(null);
   const [siteSafetyLoading, setSiteSafetyLoading] = useState(false);
+  const [autonomousMemory, setAutonomousMemory] = useState<SharedTaskMemory | null>(null);
   const [siteChat, setSiteChat] = useState<SiteChatState>({
     status: "idle",
     startUrl: "",
@@ -427,8 +436,14 @@ export const App: React.FC = () => {
   const siteChatRunRef = useRef(0);
   const siteChatTabRef = useRef<number | null>(null);
   const siteSafetyRunRef = useRef(0);
+  const orchestratorRef = useRef<AutonomousOrchestrator | null>(null);
+  const settingsRef = useRef<SettingsState>(settings);
+  const activeTabIdRef = useRef<number | null>(activeTabId);
+  const spokenAutonomousResponseRef = useRef<string>("");
   stepsRef.current = steps;
   siteChatRef.current = siteChat;
+  settingsRef.current = settings;
+  activeTabIdRef.current = activeTabId;
 
   const resetSiteChatSession = () => {
     if (siteIndexPollRef.current) clearTimeout(siteIndexPollRef.current);
@@ -476,7 +491,7 @@ export const App: React.FC = () => {
     });
 
     // Listen for tab activation changes
-    const onTabActivated = (activeInfo: chrome.tabs.TabActiveInfo) => {
+    const onTabActivated = (activeInfo: { tabId: number }) => {
       if (siteChatRef.current.status !== "idle" && siteChatTabRef.current !== null && siteChatTabRef.current !== activeInfo.tabId) {
         resetSiteChatSession();
       }
@@ -489,7 +504,7 @@ export const App: React.FC = () => {
     };
 
     // Also update URL when tab updates (e.g. navigation within same tab)
-    const onTabUpdated = (tabId: number, _info: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
+    const onTabUpdated = (tabId: number, _info: unknown, tab: chrome.tabs.Tab) => {
       if (tab.active) {
         if (siteChatRef.current.status !== "idle" && siteChatTabRef.current === tabId && tab.url && tab.url !== siteChatRef.current.startUrl) {
           resetSiteChatSession();
@@ -501,11 +516,24 @@ export const App: React.FC = () => {
       }
     };
 
+    const onTabRemoved = (tabId: number) => {
+      void orchestratorRef.current?.handleTabRemoved(tabId);
+    };
+    const onRuntimeMessage = (message: { type?: string; tabId?: number }) => {
+      if (message.type === "BV_AGENT_TAB_REMOVED" && typeof message.tabId === "number") {
+        void orchestratorRef.current?.handleTabRemoved(message.tabId);
+      }
+    };
+
     chrome.tabs.onActivated.addListener(onTabActivated);
     chrome.tabs.onUpdated.addListener(onTabUpdated);
+    chrome.tabs.onRemoved.addListener(onTabRemoved);
+    chrome.runtime.onMessage.addListener(onRuntimeMessage);
     return () => {
       chrome.tabs.onActivated.removeListener(onTabActivated);
       chrome.tabs.onUpdated.removeListener(onTabUpdated);
+      chrome.tabs.onRemoved.removeListener(onTabRemoved);
+      chrome.runtime.onMessage.removeListener(onRuntimeMessage);
     };
   }, []);
 
@@ -541,6 +569,7 @@ export const App: React.FC = () => {
     conversationRef.current = [];
     awaitingUserReplyRef.current = false;
     formFillRef.current = null;
+    void orchestratorRef.current?.stop(false);
 
     // Notify tab content script to remove indicator
     if (activeTabId) {
@@ -581,6 +610,111 @@ export const App: React.FC = () => {
       throw new Error(response?.error || "Failed to retrieve page snapshot from tab.");
     }
     return response.snapshot as PageSnapshot;
+  };
+
+  const getAutonomousOrchestrator = (): AutonomousOrchestrator => {
+    if (orchestratorRef.current) return orchestratorRef.current;
+
+    const browser: BrowserTabAdapter = {
+      async getActiveTab() {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = tabs[0];
+        return tab?.id === undefined ? undefined : { id: tab.id, url: tab.url, title: tab.title, windowId: tab.windowId, active: tab.active };
+      },
+      async getTab(tabId) {
+        try {
+          const tab = await chrome.tabs.get(tabId);
+          return tab.id === undefined ? undefined : { id: tab.id, url: tab.url, title: tab.title, windowId: tab.windowId, active: tab.active };
+        } catch {
+          return undefined;
+        }
+      },
+      async createTab(options) {
+        const tab = await chrome.tabs.create(options);
+        if (tab.id === undefined) throw new Error("Chrome did not return an ID for the new tab.");
+        return { id: tab.id, url: tab.url, title: tab.title, windowId: tab.windowId, active: tab.active };
+      },
+      async updateTab(tabId, update) {
+        const tab = await chrome.tabs.update(tabId, update);
+        return tab?.id === undefined ? undefined : { id: tab.id, url: tab.url, title: tab.title, windowId: tab.windowId, active: tab.active };
+      },
+      async removeTab(tabId) {
+        await chrome.tabs.remove(tabId);
+      },
+      async sendMessage<T>(tabId: number, message: Record<string, unknown>): Promise<T> {
+        return sendTabMessage<T>(tabId, message);
+      },
+    };
+
+    const orchestrator = new AutonomousOrchestrator({
+      browser,
+      persistence: createChromeMemoryPersistence({
+        async get(keys) { return await chrome.storage.local.get(keys) as Record<string, unknown>; },
+        async set(items) { await chrome.storage.local.set(items); },
+      }),
+      createPlanner: () => createPlanner({
+        provider: settingsRef.current.llmProvider,
+        apiKey: settingsRef.current.llmApiKey,
+        endpoint: settingsRef.current.llmEndpoint,
+        model: settingsRef.current.llmModel,
+      }),
+      summarize: (state) => summarizeTask({
+        provider: settingsRef.current.llmProvider,
+        apiKey: settingsRef.current.llmApiKey,
+        endpoint: settingsRef.current.llmEndpoint,
+        model: settingsRef.current.llmModel,
+      }, state),
+      onStateChange: (state) => {
+        setAutonomousMemory(state);
+        if (state.status === "running") {
+          setStatus((current) => current === "listening" ? current : "thinking");
+          setStatusText(`Autonomous task · ${state.subtasks.filter((subtask) => subtask.status === "completed").length}/${state.subtasks.length} workers complete`);
+        } else if (state.status === "waiting") {
+          setStatus("confirmation");
+          setStatusText("Autonomous task is waiting for your response");
+        } else if (state.status === "completed") {
+          setStatus("idle");
+          setStatusText("Autonomous task completed");
+          if (state.finalResponse && spokenAutonomousResponseRef.current !== state.finalResponse) {
+            spokenAutonomousResponseRef.current = state.finalResponse;
+            void speakStatus(state.finalResponse.slice(0, 700));
+          }
+        } else if (state.status === "failed") {
+          setStatus("idle");
+          setStatusText("Autonomous task finished with worker errors");
+        }
+      },
+    });
+    orchestratorRef.current = orchestrator;
+    return orchestrator;
+  };
+
+  useEffect(() => {
+    const orchestrator = getAutonomousOrchestrator();
+    void orchestrator.recover({ activeTabId: activeTabIdRef.current || undefined }).then(setAutonomousMemory).catch((error) => {
+      console.warn("Could not restore autonomous task memory:", error);
+    });
+  }, []);
+
+  const startAutonomousTask = async (instruction: string) => {
+    const orchestrator = getAutonomousOrchestrator();
+    setStatus("thinking");
+    setStatusText("Breaking the task into coordinated browser workers...");
+    try {
+      await orchestrator.start(instruction, {
+        activeTabId: activeTabIdRef.current || undefined,
+        decompose: (request) => decomposeTask({
+          provider: settingsRef.current.llmProvider,
+          apiKey: settingsRef.current.llmApiKey,
+          endpoint: settingsRef.current.llmEndpoint,
+          model: settingsRef.current.llmModel,
+        }, request),
+      });
+    } catch (error) {
+      setStatus("idle");
+      setStatusText(error instanceof Error ? error.message : "Could not start the autonomous task.");
+      throw error;
+    }
   };
 
   /**
@@ -765,11 +899,23 @@ export const App: React.FC = () => {
 
   const handleUserRequest = async (text: string) => {
     if (formFillRef.current && await submitFormFieldAnswer(text)) return;
+    const autonomous = orchestratorRef.current;
+    if (autonomous) {
+      const autonomousStatus = autonomous.memory.snapshot().status;
+      if (autonomousStatus === "running" || autonomousStatus === "waiting") {
+        await autonomous.handleUserInput(text);
+        return;
+      }
+    }
     if (siteChatRef.current.status === "ready" && siteChatRef.current.siteId) {
       await answerFromSite(text);
       return;
     }
-    await runAgentLoop(text);
+    if (snips.length > 0 || isRestrictedPage(activeTabUrl) || /\b(fill|complete|populate|enter details|register|sign up|apply for|bhar(?:o|na|do|de))\b|फॉर्म|फ़ॉर्म|भर(?:ो|ना|ें)/i.test(text)) {
+      await runAgentLoop(text);
+      return;
+    }
+    await startAutonomousTask(text);
   };
 
   const handleUserRequestSafely = async (text: string) => {
@@ -1368,6 +1514,21 @@ export const App: React.FC = () => {
         break;
       }
 
+      if (action.action === "open_tab") {
+        const opened = await chrome.tabs.create({ url: action.url, active: false });
+        const rationaleText = action.rationale || `Opened a new research tab for ${action.task || action.url}.`;
+        setSteps((prev) => [...prev, {
+          stepNumber: stepCount,
+          action,
+          status: "success",
+          spokenSummary: rationaleText,
+          timestamp: Date.now(),
+        }]);
+        await speakStatus(rationaleText);
+        if (opened.id) setActiveTabTitle(opened.title || action.task || "Research tab");
+        continue;
+      }
+
       // 4. Execute Action in Tab
       setStatus("executing");
       setStatusText(`${translate("Step", "स्टेप")} ${stepCount}: ${translate("Executing", "कार्रवाई हो रही है")} ${action.action}...`);
@@ -1466,7 +1627,7 @@ export const App: React.FC = () => {
     const actionSummary = paymentReceiptVisible
       ? "भुगतान की रसीद दिखाई दे रही है। भुगतान की पुष्टि हो गई है।"
       : "पुष्टि की गई कार्रवाई पूरी हुई। अब अगला कदम जाँच रहा हूँ।";
-    const nextSteps = [...stepsRef.current, {
+    const nextSteps: StepLogEntry[] = [...stepsRef.current, {
       stepNumber: stepsRef.current.length + 1,
       action: actionToRun,
       status: "success",
@@ -1709,6 +1870,72 @@ export const App: React.FC = () => {
             <span>{settings.llmProvider === "mock" ? "Offline engine" : `${settings.llmModel || "AI"} engine`}</span>
           </div>
         </div>
+
+        {autonomousMemory && autonomousMemory.originalInstruction && (
+          <section className="autonomous-card" aria-label="Autonomous task progress">
+            <div className="autonomous-card-header">
+              <div>
+                <div className="autonomous-kicker">AUTONOMOUS TASK</div>
+                <strong>{autonomousMemory.objective}</strong>
+              </div>
+              <span className={`autonomous-status ${autonomousMemory.status}`}>{autonomousMemory.status}</span>
+            </div>
+            <div className="autonomous-progress">
+              <span>{autonomousMemory.subtasks.filter((subtask) => subtask.status === "completed").length}/{autonomousMemory.subtasks.length} workers complete</span>
+              <span>Memory v{autonomousMemory.version}</span>
+            </div>
+            {autonomousMemory.finalResponse && (
+              <div className="autonomous-final-response">
+                <div className="autonomous-kicker">FINAL RESPONSE</div>
+                <p>{autonomousMemory.finalResponse}</p>
+              </div>
+            )}
+            <div className="autonomous-workers">
+              {autonomousMemory.subtasks.map((subtask) => {
+                const tab = autonomousMemory.tabs.find((candidate) => candidate.subtaskId === subtask.id);
+                return (
+                  <div className="autonomous-worker" key={subtask.id}>
+                    <span className={`worker-status ${subtask.status}`} />
+                    <div className="worker-copy">
+                      <strong>{subtask.title}</strong>
+                      <span>{subtask.status}{tab?.tabId ? ` · tab ${tab.tabId}` : ""}{subtask.error ? ` · ${subtask.error}` : ""}</span>
+                    </div>
+                    {tab?.tabId && tab.status !== "closed" && (
+                      <button
+                        type="button"
+                        className="worker-switch"
+                        onClick={() => void getAutonomousOrchestrator().activateWorker(subtask.id)}
+                        title="Switch to this worker tab"
+                      >
+                        View
+                      </button>
+                    )}
+                    {tab?.createdByAgent && tab.status !== "closed" && (
+                      <button
+                        type="button"
+                        className="worker-switch"
+                        onClick={() => void getAutonomousOrchestrator().closeWorkerTab(subtask.id)}
+                        title="Close this worker tab"
+                      >
+                        Close
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {autonomousMemory.findings.length > 0 && (
+              <div className="autonomous-findings">
+                <div className="autonomous-kicker">LIVE FINDINGS</div>
+                {autonomousMemory.findings.slice(-4).map((finding) => (
+                  <div className="autonomous-finding" key={`${finding.id}-${finding.version}`}>
+                    <strong>{finding.title}</strong><span>{finding.content}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
         {/* Restricted Page Warning Banner */}
         {activeTabUrl && isRestrictedPage(activeTabUrl) && (

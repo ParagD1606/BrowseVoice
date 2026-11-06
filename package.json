@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vite build && vite build --config vite.content.config.ts",
     "dev": "vite",
-    "test": "node --experimental-strip-types --test tests/commands.test.mjs tests/identifier-preservation.test.mjs tests/site-knowledge.test.mjs tests/site-safety.test.mjs",
+    "test": "node --experimental-strip-types --test tests/commands.test.mjs tests/identifier-preservation.test.mjs tests/orchestrator.test.mjs tests/site-knowledge.test.mjs tests/site-safety.test.mjs",
     "portal": "node mock-portal/server.mjs",
     "knowledge": "node backend/server.mjs"
   },

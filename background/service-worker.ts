@@ -16,6 +16,13 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log("Browse Voice Extension installed successfully.");
 });
 
+// Forward browser lifecycle events to the side panel orchestrator. The shared
+// task itself is persisted by the panel, so a suspended service worker does not
+// erase coordination state.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  chrome.runtime.sendMessage({ type: "BV_AGENT_TAB_REMOVED", tabId }).catch(() => {});
+});
+
 // Helper: Ensure the content script is injected in a tab
 async function ensureContentScriptInjected(tabId: number): Promise<boolean> {
   try {

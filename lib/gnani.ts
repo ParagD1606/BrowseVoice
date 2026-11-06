@@ -166,7 +166,7 @@ export class GnaniPrismaWebSocketClient {
           }
         };
 
-        this.ws.onerror = (evt) => {
+        this.ws.onerror = () => {
           const err = new Error("Gnani Prisma WebSocket error occurred.");
           this.onErrorCallback(err);
           reject(err);
@@ -185,8 +185,15 @@ export class GnaniPrismaWebSocketClient {
    * Send a chunk of raw 16-bit Linear PCM audio to Gnani Prisma.
    */
   public sendAudioChunk(pcmData: Int16Array | ArrayBuffer): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(pcmData);
+    if (this.isConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (pcmData instanceof Int16Array) {
+        // Convert to a standalone ArrayBuffer so DOM typings and browsers that
+        // reject SharedArrayBuffer-backed views receive only the audio bytes.
+        const bytes = new Uint8Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength);
+        this.ws.send(bytes.slice().buffer);
+      } else {
+        this.ws.send(pcmData);
+      }
     }
   }
 

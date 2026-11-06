@@ -11,7 +11,7 @@ import {
   parseAndValidatePlannerJson,
   type PlannerAction,
 } from "./schema.ts";
-import type { PageSnapshot, InteractiveElement } from "./safety.ts";
+import type { PageSnapshot } from "./safety.ts";
 import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "./payment-state.ts";
 import {
   extractExactValueCandidates,
@@ -34,6 +34,7 @@ export interface PlannerRequest {
   snapshot: PageSnapshot;
   history: StepLogEntry[]; // last 5 steps
   conversation?: Array<{ role: "user" | "assistant"; content: string }>;
+  sharedMemoryContext?: string;
   pendingConfirmation?: boolean;
 }
 
@@ -254,6 +255,7 @@ RULES:
    - {"action": "select", "id": <number>, "value": "<option>", "rationale": "<short rationale>"}
    - {"action": "scroll", "direction": "up"|"down"|"left"|"right", "amount": 300, "rationale": "<short rationale>"}
    - {"action": "navigate", "url": "<valid url>", "rationale": "<short rationale>"}
+   - {"action": "open_tab", "url": "<valid url>", "task": "<optional task for the new tab>", "rationale": "<short rationale>"}
    - {"action": "ask_user", "question": "<question in user's language>", "options": ["opt1", "opt2"], "rationale": "<short rationale>"}
    - {"action": "done", "summary": "<concise summary of completed work>"}
 
@@ -266,7 +268,8 @@ RULES:
 6. Treat values as data, not prose. For email addresses, UPI IDs, URLs/domains, phone numbers, OTPs, account references, usernames, passwords, API keys, codes, and other technical identifiers, copy every character exactly as supplied. Never translate, transliterate, normalize case, replace punctuation, or spell out these values.
 7. Use the target field's label, name, type, autocomplete, placeholder, and role to decide whether it expects an exact identifier. Keep ordinary Hindi/Marathi/English sentences natural in regular text fields.
 8. If an exact identifier field is requested but the exact identifier is not present or is only a phonetic/non-Latin transcription, return ask_user asking the user to repeat or confirm the exact value. Never guess.
-9. Output raw JSON only with NO markdown wrappers or extra commentary.`;
+9. Use open_tab when an independent source or subtask should be researched in a separate browser tab; include the URL and a concise task for its worker.
+10. Output raw JSON only with NO markdown wrappers or extra commentary.`;
 
 /**
  * LLM Provider communicating with OpenAI / OpenRouter / DeepSeek / Groq compatible APIs.
@@ -428,6 +431,7 @@ export function buildPlannerPrompt(
         role: turn.role,
         content: turn.content.slice(0, 180),
       })),
+    sharedMemory: request.sharedMemoryContext?.slice(0, 14000),
     pendingConfirmation: Boolean(request.pendingConfirmation),
     page: {
       url: request.snapshot.url.slice(0, 300),
