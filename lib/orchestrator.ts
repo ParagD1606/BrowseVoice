@@ -163,6 +163,30 @@ function safeWebUrl(value: unknown): string | undefined {
   }
 }
 
+/**
+ * Resolves an explicit user request to open one website in one new tab.
+ * These commands are deterministic browser operations and must not consume an
+ * LLM call or be decomposed into multiple workers.
+ */
+export function resolveDirectNewTabIntent(request: string): string | undefined {
+  const normalized = request.trim().replace(/[?!。，。]+$/u, "");
+  const match = normalized.match(
+    /^(?:(?:can|could|would)\s+(?:you|u)|please|i\s+want\s+you\s+to)?\s*(?:open|launch|visit|go\s+to)\s+(.+?)\s+(?:in|on)\s+(?:a\s+)?(?:new\s+tab|another\s+tab|naye?\s+tab(?:\s+mein)?|नए\s+टैब\s+में)$/iu,
+  );
+  if (!match) return undefined;
+
+  const target = match[1].trim().replace(/^(?:the|website|site)\s+/i, "").replace(/\s+(?:website|site)$/i, "");
+  if (!target) return undefined;
+  const directUrl = safeWebUrl(target);
+  if (directUrl) return directUrl;
+  if (/^(?:www\.)?[^\s/]+\.[a-z]{2,}(?:\/[^\s]*)?$/i.test(target)) return safeWebUrl(`https://${target}`);
+
+  // A bare site name is resolved as its conventional .com domain. This keeps
+  // the operation generic without a website-specific task or worker mapping.
+  const domain = target.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9.-]/g, "");
+  return domain ? safeWebUrl(`https://${domain}.com`) : undefined;
+}
+
 function normalizeSubtasks(specs: SubtaskSpec[], instruction: string): SubtaskSpec[] {
   const seen = new Set<string>();
   const normalized = specs.map((spec, index) => {
@@ -177,8 +201,20 @@ function normalizeSubtasks(specs: SubtaskSpec[], instruction: string): SubtaskSp
       dependsOn: Array.isArray(spec.dependsOn) ? spec.dependsOn.map(String).filter((dependency) => dependency !== uniqueId) : [],
     };
   });
-  const known = new Set(normalized.map((spec) => spec.id));
-  return normalized.map((spec) => ({ ...spec, dependsOn: spec.dependsOn.filter((dependency) => known.has(dependency)) }));
+  const deduplicated = normalized.filter((spec, index, all) => {
+    const signature = [
+      spec.startUrl || "",
+      spec.title.trim().toLowerCase().replace(/\s+/g, " "),
+      spec.instruction.trim().toLowerCase().replace(/\s+/g, " "),
+    ].join("|");
+    return all.findIndex((candidate) => [
+      candidate.startUrl || "",
+      candidate.title.trim().toLowerCase().replace(/\s+/g, " "),
+      candidate.instruction.trim().toLowerCase().replace(/\s+/g, " "),
+    ].join("|") === signature) === index;
+  });
+  const known = new Set(deduplicated.map((spec) => spec.id));
+  return deduplicated.map((spec) => ({ ...spec, dependsOn: spec.dependsOn.filter((dependency) => known.has(dependency)) }));
 }
 
 export function createInitialTaskMemory(
@@ -459,6 +495,8 @@ export class AutonomousOrchestrator {
     if (current.status === "running" || current.status === "waiting") {
       throw new Error("Browse Voice already has an autonomous task in progress.");
     }
+    const directUrl = resolveDirectNewTabIntent(instruction);
+    if (directUrl) return this.openDirectTab(instruction, directUrl);
     let specs = options.subtasks;
     if (!specs) {
       specs = options.decompose ? await options.decompose(instruction) : [{ id: "primary", title: "Primary task", instruction }];
@@ -468,6 +506,67 @@ export class AutonomousOrchestrator {
     await this.memory.replace(initial, "orchestrator", "task-started");
     const startingTabId = options.activeTabId ?? (await this.dependencies.browser.getActiveTab())?.id;
     await this.schedule(startingTabId);
+    return this.memory.snapshot();
+  }
+
+  /** Completes a deterministic one-tab request without invoking a planner. */
+  public async openDirectTab(instruction: string, url: string): Promise<SharedTaskMemory> {
+    await this.initialize();
+    const directUrl = safeWebUrl(url);
+    if (!directUrl) throw new Error("Browse Voice can only open http(s) websites.");
+    const current = this.memory.snapshot();
+    if (current.status === "running" || current.status === "waiting") {
+      throw new Error("Browse Voice already has an autonomous task in progress.");
+    }
+
+    const workerId = createId("direct-tab-worker");
+    const initial = createInitialTaskMemory(instruction, [{
+      id: "direct-open",
+      title: "Open tab",
+      instruction,
+      startUrl: directUrl,
+    }], this.now());
+    initial.status = "running";
+    await this.memory.replace(initial, "orchestrator", "direct-tab-task-started");
+
+    try {
+      const tab = await this.dependencies.browser.createTab({ url: directUrl, active: true });
+      const completedAt = this.now();
+      await this.memory.commit(workerId, "direct-tab-opened", `Opened ${directUrl} in one new tab.`, (state) => {
+        const subtask = state.subtasks[0];
+        if (subtask) {
+          subtask.status = "completed";
+          subtask.workerId = workerId;
+          subtask.tabId = tab.id;
+          subtask.attempts = 1;
+          subtask.result = `Opened ${directUrl} in a new tab.`;
+          subtask.completedAt = completedAt;
+        }
+        state.tabs.push({
+          tabId: tab.id,
+          workerId,
+          subtaskId: "direct-open",
+          createdByAgent: true,
+          status: "active",
+          url: tab.url || directUrl,
+          title: tab.title,
+          lastUpdatedAt: completedAt,
+        });
+        state.status = "completed";
+        state.finalResponse = `Opened ${directUrl} in a new tab.`;
+        state.conversation.push({ role: "assistant", content: state.finalResponse, createdAt: completedAt });
+      });
+    } catch (error) {
+      await this.memory.commit("orchestrator", "direct-tab-failed", error instanceof Error ? error.message : "Could not open the new tab.", (state) => {
+        const subtask = state.subtasks[0];
+        if (subtask) {
+          subtask.status = "failed";
+          subtask.error = error instanceof Error ? error.message : "Could not open the new tab.";
+        }
+        state.status = "failed";
+        state.errors.push({ actor: "orchestrator", message: error instanceof Error ? error.message : "Could not open the new tab.", retryable: false, createdAt: this.now() });
+      });
+    }
     return this.memory.snapshot();
   }
 
@@ -749,12 +848,21 @@ export class AutonomousOrchestrator {
             await this.failWorker(subtaskId, "The worker requested a non-web tab URL, which Browse Voice blocks.", false);
             return;
           }
+          const requestedUrl = safeWebUrl(action.url)!;
+          const existingTab = this.memory.snapshot().tabs.find((tab) => tab.status !== "closed" && tab.url && safeWebUrl(tab.url) === requestedUrl);
+          if (existingTab) {
+            await this.memory.commit(workerId, "duplicate-tab-request", `Reused existing managed tab ${existingTab.tabId} instead of opening a duplicate.`, (next) => {
+              next.decisions.push(`Worker ${workerId} requested ${requestedUrl}, but tab ${existingTab.tabId} is already managed.`);
+            });
+            history.push({ stepNumber: step, action, status: "success", spokenSummary: "The requested website is already open in a managed tab.", timestamp: this.now() });
+            continue;
+          }
           const newSubtaskId = `${subtaskId}-child-${step}`;
           await this.addSubtask({
             id: newSubtaskId,
             title: action.task || `Research opened tab ${step}`,
             instruction: action.task || `Inspect the page opened at ${action.url} and report useful findings for the parent task.`,
-            startUrl: action.url,
+            startUrl: requestedUrl,
           }, undefined);
           history.push({ stepNumber: step, action, status: "success", timestamp: this.now() });
           continue;
