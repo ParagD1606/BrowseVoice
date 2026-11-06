@@ -23,9 +23,9 @@ import {
   createPlanner,
   answerAboutSnips,
   convertFormAnswerToEnglish,
+  protectPlannerAction,
   type PlannerProvider,
   type StepLogEntry,
-  type LLMConfig,
   type SnipContext,
 } from "../lib/planner";
 import {
@@ -36,6 +36,11 @@ import {
 } from "../lib/safety";
 import { validatePlannerAction, type PlannerAction } from "../lib/schema";
 import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "../lib/payment-state";
+import {
+  contextFromElement,
+  mergeTranscriptsPreservingIdentifiers,
+  resolveFormValue,
+} from "../lib/form-values";
 import { MicrophoneSession } from "./mic";
 import {
   askSiteQuestion,
@@ -405,6 +410,7 @@ export const App: React.FC = () => {
   // Refs for tracking active objects
   const micSessionRef = useRef<MicrophoneSession>(new MicrophoneSession());
   const gnaniWsRef = useRef<GnaniPrismaWebSocketClient | null>(null);
+  const gnaniTranscriptRef = useRef<string>("");
   const isStoppedRef = useRef<boolean>(false);
   const stepsRef = useRef<StepLogEntry[]>([]);
   const taskGoalRef = useRef<string | null>(null);
@@ -637,7 +643,20 @@ export const App: React.FC = () => {
         return true;
       }
       if (!element) throw new Error(`I can no longer find the ${field.label} field. Check the page and try again.`);
-
+      const exactValueDecision = resolveFormValue(value, contextFromElement(element));
+      if (exactValueDecision.requiresExactValue) {
+        if (exactValueDecision.exactValue !== undefined) {
+          // Preserve the recognized identifier exactly, including case and
+          // punctuation. Do not pass it through translation or normalization.
+          value = exactValueDecision.exactValue;
+        } else if (exactValueDecision.ambiguous) {
+          const message = `I could not recover the exact ${exactValueDecision.expectedKind} from speech. Please repeat it using its original English characters, including symbols such as @, dot, underscore, or hyphen.`;
+          setStatus("idle");
+          setStatusText(message);
+          await speakStatus(message);
+          return true;
+        }
+      }
       if (field.kind === "text" && /\p{Script=Devanagari}/u.test(value)) {
         const normalizedField = `${field.label} ${field.name || ""} ${field.type || ""}`.toLowerCase();
         if (/email|e-mail|url|website|website address/.test(normalizedField)) {
@@ -667,6 +686,7 @@ export const App: React.FC = () => {
           return true;
         }
       }
+
       let selectedValue = value;
       if (field.kind === "select") {
         const match = matchOption(field.options || [], value);
@@ -1225,6 +1245,12 @@ export const App: React.FC = () => {
           history: stepsRef.current.slice(-5),
           conversation: conversationRef.current,
         });
+        action = protectPlannerAction({
+          userRequest: taskGoal,
+          snapshot: currentSnapshot,
+          history: stepsRef.current.slice(-5),
+          conversation: conversationRef.current,
+        }, action);
       } catch (planErr) {
         const errMsg = planErr instanceof Error ? planErr.message : "Planning error.";
         await speakStatus(`योजना बनाने में त्रुटि: ${errMsg}`);
@@ -1475,6 +1501,7 @@ export const App: React.FC = () => {
     const generation = ++voiceListenGenerationRef.current;
     setShowMicPermissionHelp(false);
     setTranscript("");
+    gnaniTranscriptRef.current = "";
     setStatus("listening");
     setStatusText(translate("Listening... Say stop or tap to end.", "सुन रहे हैं... रोकने के लिए stop कहें या टैप करें।"));
 
@@ -1484,7 +1511,9 @@ export const App: React.FC = () => {
         gnaniWsRef.current = new GnaniPrismaWebSocketClient(
           { apiKey: settings.gnaniApiKey, languageCode: speechLanguage, sttModel: "prisma-v3.0" },
           (text) => {
-            if (generation === voiceListenGenerationRef.current && voiceSessionActiveRef.current) setTranscript(text);
+            if (generation !== voiceListenGenerationRef.current || !voiceSessionActiveRef.current) return;
+            gnaniTranscriptRef.current = text;
+            setTranscript(text);
           },
           (err) => console.warn("Prisma WS error:", err),
         );
@@ -1497,15 +1526,18 @@ export const App: React.FC = () => {
         },
         (text, isFinal) => {
           if (generation !== voiceListenGenerationRef.current || !voiceSessionActiveRef.current) return;
-          setTranscript(text);
-          if (isStopCommand(text)) {
+          const finalText = isFinal
+            ? mergeTranscriptsPreservingIdentifiers(text, gnaniTranscriptRef.current)
+            : text;
+          setTranscript(finalText);
+          if (isStopCommand(finalText)) {
             handleEmergencyStop();
             return;
           }
           if (isFinal && !voiceTurnProcessingRef.current) {
             micSessionRef.current.stop();
             gnaniWsRef.current?.disconnect();
-            void voiceTurnHandlerRef.current(text);
+            void voiceTurnHandlerRef.current(finalText);
           }
         },
         formFillRef.current ? "hi-IN" : settings.languageCode,

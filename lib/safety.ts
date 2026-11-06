@@ -24,6 +24,8 @@ export interface InteractiveElement {
   type?: string;
   name?: string;
   placeholder?: string;
+  autocomplete?: string;
+  inputMode?: string;
   value?: string;
   checked?: boolean;
   options?: string[];
