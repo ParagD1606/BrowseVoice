@@ -143,6 +143,17 @@ function titleCase(value: string): string {
   return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function buildSingleSubTask(userRequest: string): SubTask[] {
+  const request = userRequest.trim();
+  const site = findKnownSites(request)[0];
+  return [{
+    id: "task-1",
+    label: site ? titleCase(site) : "Browser task",
+    ...(site && /\b(?:open|go|navigate|visit|kholo|khol|खोलो|खोलें)\b/i.test(request) ? { startUrl: KNOWN_SITE_URLS[site] } : {}),
+    goal: request,
+  }];
+}
+
 function findKnownSites(request: string): string[] {
   const lower = request.toLowerCase();
   return Object.keys(KNOWN_SITE_URLS)
@@ -155,18 +166,13 @@ function buildMockSubTasks(userRequest: string): SubTask[] {
   const sites = findKnownSites(request);
   const clearlyParallel = sites.length > 1 && (
     /\b(?:one|another|separate|different)\s+tab\b/i.test(request) ||
-    /\b(?:tabs?|tab mein|tab me|दूसरे टैब|अलग टैब|ek tab|एक टैब)\b/i.test(request) ||
-    /\b(?:on|in|par|में)\s+(?:youtube|google|amazon|flipkart|github|instagram|facebook|linkedin)\b/i.test(request) && /\b(?:and|aur|और)\b/i.test(request)
+    /\b(?:other|another)\s+tab\b|\b(?:tabs?|tab mein|tab me|दूसरे टैब|अलग टैब|ek tab|एक टैब)\b/i.test(request) ||
+    ( /\b(?:on|in|par|में)\s+(?:youtube|google|amazon|flipkart|github|instagram|facebook|linkedin)\b/i.test(request) && /\b(?:and|aur|और)\b/i.test(request) ) ||
+    /\b(?:open|kholo|khol|खोलो|खोलें)\b/i.test(request)
   );
 
   if (!clearlyParallel || sites.length < 2) {
-    const site = sites[0];
-    return [{
-      id: "task-1",
-      label: site ? titleCase(site) : "Browser task",
-      ...(site && /\b(?:open|go|navigate|visit|kholo|khol|खोलो|खोलें)\b/i.test(request) ? { startUrl: KNOWN_SITE_URLS[site] } : {}),
-      goal: request,
-    }];
+    return buildSingleSubTask(request);
   }
 
   const searchBySite = new Map<string, string>();
@@ -186,8 +192,21 @@ function buildMockSubTasks(userRequest: string): SubTask[] {
     if (knownSite) searchBySite.set(knownSite, match[1].trim());
   }
 
-  // Also handle the common Hindi/Hinglish order: "youtube par X search karo".
+  // Handle coordinated queries where the second clause omits both the verb
+  // and quotation marks: "search X in YouTube and Y in Google".
   const knownNames = sites.map((site) => site.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const queryBySitePattern = new RegExp(`(?:[,;]|\\b(?:and|aur)\\b|और)\\s*(?:(?:search|find|look\\s+up)\\s+)?["'“”‘’]?(.+?)["'“”‘’]?\\s+(?:on|in|at|par|में|mein|me)\\s+(${knownNames})(?=\\s+(?:and|aur)\\b|\\s*[,;]|$)`, "giu");
+  for (const match of request.matchAll(queryBySitePattern)) {
+    const site = normalizeSiteName(match[2]);
+    const knownSite = sites.find((candidate) => normalizeSiteName(candidate) === site || site.includes(normalizeSiteName(candidate)));
+    if (knownSite) {
+      const rawQuery = match[1].trim();
+      const repeatedVerb = /(?:search|find|look\s+up)\s+(.+)$/i.exec(rawQuery)?.[1] || rawQuery;
+      searchBySite.set(knownSite, repeatedVerb.trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, ""));
+    }
+  }
+
+  // Also handle the common Hindi/Hinglish order: "youtube par X search karo".
   const reverseSearchPattern = new RegExp(`\\b(${knownNames})\\s+(?:par|mein|में)\\s+["'“”‘’]?(.+?)["'“”‘’]?\\s+(?:search|खोज|ढूंढ)`, "giu");
   for (const match of request.matchAll(reverseSearchPattern)) {
     const site = normalizeSiteName(match[1]);
@@ -208,6 +227,16 @@ function buildDecompositionPrompt(userRequest: string): string {
   return `User request:\n${userRequest.slice(0, 2000)}\n\nReturn the independent task array now.`;
 }
 
+class DecompositionValidationError extends Error {
+  readonly rawResponse: string;
+
+  constructor(message: string, rawResponse: string) {
+    super(message);
+    this.name = "DecompositionValidationError";
+    this.rawResponse = rawResponse;
+  }
+}
+
 async function parseDecompositionResponse(response: Response, provider: string): Promise<SubTask[]> {
   if (!response.ok) throw await plannerApiError(provider, response);
   const data = await response.json();
@@ -216,18 +245,28 @@ async function parseDecompositionResponse(response: Response, provider: string):
     : data?.choices?.[0]?.message?.content;
   if (!content || typeof content !== "string") throw new Error(`${provider} returned empty or malformed task decomposition.`);
   const validation = parseAndValidateSubTasksJson(content);
-  if (!validation.valid) throw new Error(`Task decomposition failed schema validation: ${validation.error}`);
+  if (!validation.valid) throw new DecompositionValidationError(`Task decomposition failed schema validation: ${validation.error}`, content);
   return validation.tasks;
+}
+
+function shouldCallDecompositionModel(userRequest: string): boolean {
+  if (findKnownSites(userRequest).length >= 2) return true;
+  return /\b(?:tab|tabs|separate|dusre\s+tab|alag\s+tab|and|aur)\b|दूसरे\s+टैब|अलग\s+टैब|और/u.test(userRequest);
+}
+
+export function fallbackToSingleTask(userRequest: string): SubTask[] {
+  return buildSingleSubTask(userRequest);
 }
 
 /** Splits a user request into at most four independent tab tasks. */
 export async function decomposeRequest(config: LLMConfig, userRequest: string): Promise<SubTask[]> {
-  if (!userRequest.trim()) return [{ id: "task-1", label: "Browser task", goal: userRequest }];
+  if (!userRequest.trim()) return fallbackToSingleTask(userRequest);
+  if (!shouldCallDecompositionModel(userRequest)) return fallbackToSingleTask(userRequest);
   if (config.provider === "mock" || !config.apiKey) return buildMockSubTasks(userRequest);
 
   const prompt = buildDecompositionPrompt(userRequest);
-  const retryCorrection = async (invalid: string, error: string): Promise<SubTask[]> => {
-    const correction = `Previous output was invalid: ${error}\nPrevious output: ${invalid}\nReturn only a valid JSON array of 1 to 4 sub-tasks.`;
+  const retryCorrection = async (invalid: string, originalRequest: string, error: string): Promise<SubTask[]> => {
+    const correction = `${buildDecompositionPrompt(originalRequest)}\n\nThe previous model output was invalid. Validation error: ${error}\nPrevious output:\n${invalid}\n\nReturn only a valid JSON array of 1 to 4 sub-tasks.`;
     if (config.provider === "gemini") {
       const model = config.model || "gemini-3.8-flash";
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`, {
@@ -252,7 +291,8 @@ export async function decomposeRequest(config: LLMConfig, userRequest: string): 
     });
     if (!response.ok) throw await plannerApiError("Gemini", response);
     try { return await parseDecompositionResponse(response, "Gemini"); } catch (error) {
-      return retryCorrection("", error instanceof Error ? error.message : "Invalid JSON");
+      const invalid = error instanceof DecompositionValidationError ? error.rawResponse : "";
+      return retryCorrection(invalid, userRequest, error instanceof Error ? error.message : "Invalid JSON");
     }
   }
 
@@ -263,7 +303,18 @@ export async function decomposeRequest(config: LLMConfig, userRequest: string): 
   });
   if (!response.ok) throw await plannerApiError("LLM", response);
   try { return await parseDecompositionResponse(response, "LLM"); } catch (error) {
-    return retryCorrection("", error instanceof Error ? error.message : "Invalid JSON");
+    const invalid = error instanceof DecompositionValidationError ? error.rawResponse : "";
+    return retryCorrection(invalid, userRequest, error instanceof Error ? error.message : "Invalid JSON");
+  }
+}
+
+/** Safe entry point for commands that must continue even if decomposition fails. */
+export async function decomposeRequestWithFallback(config: LLMConfig, userRequest: string): Promise<SubTask[]> {
+  try {
+    return await decomposeRequest(config, userRequest);
+  } catch (error) {
+    if (isPlannerRateLimitError(error)) throw error;
+    return fallbackToSingleTask(userRequest);
   }
 }
 

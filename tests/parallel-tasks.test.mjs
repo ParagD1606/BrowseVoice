@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decomposeRequest } from "../lib/planner.ts";
+import { decomposeRequest, decomposeRequestWithFallback } from "../lib/planner.ts";
 import { validatePlannerAction } from "../lib/schema.ts";
 import {
   createTaskRunnerContext,
@@ -28,13 +28,31 @@ function fakeTransport() {
   };
 }
 
-test("mock decomposition splits the independent YouTube and Google example", async () => {
-  const tasks = await decomposeRequest({ provider: "mock" }, "open youtube in one tab and google in another, search 'lucku man' on youtube and 'shinchan' on google");
+test("mock decomposition handles other-tab wording and keeps each query with its site", async () => {
+  const tasks = await decomposeRequest({ provider: "mock" }, "open youtube in one tab and google on other tab and search lucku man in youtube and shinchan in google");
   assert.equal(tasks.length, 2);
   assert.equal(tasks[0].startUrl, "https://youtube.com");
   assert.equal(tasks[1].startUrl, "https://google.com");
   assert.match(tasks[0].goal, /lucku man/i);
   assert.match(tasks[1].goal, /shinchan/i);
+});
+
+test("mock decomposition handles omitted search verb with in", async () => {
+  const tasks = await decomposeRequest({ provider: "mock" }, "search lucku man in youtube and shinchan in google");
+  assert.equal(tasks.length, 2);
+  assert.match(tasks[0].goal, /lucku man/i);
+  assert.doesNotMatch(tasks[0].goal, /shinchan/i);
+  assert.match(tasks[1].goal, /shinchan/i);
+  assert.doesNotMatch(tasks[1].goal, /lucku man/i);
+});
+
+test("mock decomposition splits open youtube and google without a tab cue", async () => {
+  const tasks = await decomposeRequest({ provider: "mock" }, "open youtube and google");
+  assert.equal(tasks.length, 2);
+  assert.equal(tasks[0].startUrl, "https://youtube.com");
+  assert.equal(tasks[1].startUrl, "https://google.com");
+  assert.doesNotMatch(tasks[0].goal, /search/i);
+  assert.doesNotMatch(tasks[1].goal, /search/i);
 });
 
 test("mock decomposition keeps a single task together and supports Hindi/Hinglish", async () => {
@@ -102,4 +120,27 @@ test("stopping a runner aborts its controller immediately", () => {
   assert.equal(second.controller.signal.aborted, false);
   stopAgentTasks([first, second]);
   assert.equal(second.controller.signal.aborted, true);
+});
+
+test("malformed decomposition JSON falls back to one task and preserves the original request on retry", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: "not valid json" } }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const request = "search lucku man on youtube and shinchan on google";
+  try {
+    const tasks = await decomposeRequestWithFallback({ provider: "openai-compatible", endpoint: "https://fake.example/v1", apiKey: "test-key", model: "test-model" }, request);
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].goal, request);
+    assert.equal(requests.length, 2, "initial request plus schema-correction retry");
+    assert.match(requests[1].messages[1].content, /search lucku man on youtube and shinchan on google/i);
+    assert.match(requests[1].messages[1].content, /Previous output:\s*not valid json/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

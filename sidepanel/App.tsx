@@ -24,6 +24,7 @@ import {
   answerAboutSnips,
   convertFormAnswerToEnglish,
   decomposeRequest,
+  fallbackToSingleTask,
   type StepLogEntry,
   type SnipContext,
 } from "../lib/planner";
@@ -461,6 +462,7 @@ export const App: React.FC = () => {
   const taskRunGenerationRef = useRef(0);
   const activeTaskIdsRef = useRef<string[]>([]);
   const summarySpokenGenerationRef = useRef(0);
+  const decompositionNoticeRef = useRef<string | null>(null);
   const ttsQueueRef = useRef<Promise<void>>(Promise.resolve());
   const voiceListenGenerationRef = useRef(0);
   const voiceTurnHandlerRef = useRef<(text: string) => Promise<void>>(async () => {});
@@ -1253,17 +1255,23 @@ export const App: React.FC = () => {
 
   const decomposeWithRetry = async (request: string): Promise<SubTask[]> => {
     const config = { provider: settings.llmProvider, apiKey: settings.llmApiKey, endpoint: settings.llmEndpoint, model: settings.llmModel } as const;
+    decompositionNoticeRef.current = null;
+    const useSingleTaskFallback = () => {
+      decompositionNoticeRef.current = translate("I couldn't split that command, so I will run it as one task.", "मैं इस कमांड को अलग नहीं कर पाया, इसलिए इसे एक काम की तरह चला रहा हूँ।");
+      return fallbackToSingleTask(request);
+    };
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         return await decomposeRequest(config, request);
       } catch (error) {
-        if (!isPlannerRateLimitError(error) || attempt >= 2) throw error;
+        if (!isPlannerRateLimitError(error)) return useSingleTaskFallback();
+        if (attempt >= 2) return useSingleTaskFallback();
         const retryAfterMs = Math.max(250, getPlannerRetryAfterMs(error) ?? 500 * (2 ** attempt));
         setStatusText(`${translate("Rate limited, retrying", "रेट लिमिट है, फिर कोशिश कर रहे हैं")} (${attempt + 1}/2)`);
         await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
       }
     }
-    return [{ id: "task-1", label: "Browser task", goal: request }];
+    return useSingleTaskFallback();
   };
 
   const maybeSpeakCombinedSummary = async () => {
@@ -1386,7 +1394,7 @@ export const App: React.FC = () => {
     taskViewsRef.current = new Map(tasks.map((task) => [task.id, { id: task.id, label: task.label, tabId: null, tabTitle: "", status: "queued", currentStep: translate("Queued", "कतार में"), steps: [] }]));
     setSteps([]);
     setStatus("thinking");
-    setStatusText(tasks.length > 1 ? translate("Opening task tabs...", "काम के टैब खोल रहे हैं...") : translate("Analyzing page...", "पेज का विश्लेषण हो रहा है..."));
+    setStatusText(decompositionNoticeRef.current || (tasks.length > 1 ? translate("Opening task tabs...", "काम के टैब खोल रहे हैं...") : translate("Analyzing page...", "पेज का विश्लेषण हो रहा है...")));
 
     const tabAssignments: Array<{ task: SubTask; tabId: number }> = [];
     try {
@@ -1406,7 +1414,8 @@ export const App: React.FC = () => {
         tabAssignments.push({ task, tabId });
       } else {
         for (const task of tasks) {
-          const tab = await chrome.tabs.create({ url: task.startUrl, active: false });
+          // Unknown sites are planner-resolved after the tab has a real page.
+          const tab = await chrome.tabs.create({ url: task.startUrl || "https://www.google.com", active: false });
           if (!tab.id) throw new Error(`Could not create a tab for ${task.label}.`);
           await waitForTabLoad(tab.id);
           const connected = await chrome.runtime.sendMessage({ type: "BV_ENSURE_TAB_CONNECTED", tabId: tab.id });
