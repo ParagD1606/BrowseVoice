@@ -345,6 +345,12 @@ function isSelectionCommand(text: string): boolean {
   return /(?:select|snip|capture|screenshot|crop|highlight).*(?:area|this|that|section|part|region)?|(?:yeh|yah|is|this)\s+(?:select|snip|capture|screenshot)|area\s+(?:select|snip)|select\s+karo/.test(value);
 }
 
+function getRepeatableActionKey(action: PlannerAction): string | null {
+  if (action.action === "click") return `click:${action.id}`;
+  if (action.action === "navigate") return `navigate:${action.url.trim().replace(/\/$/, "")}`;
+  return null;
+}
+
 function cropCapturedImage(dataUrl: string, rect: { x: number; y: number; width: number; height: number }, viewportWidth: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -421,6 +427,9 @@ export const App: React.FC = () => {
   const formFillRef = useRef<FormFillSession | null>(null);
   const voiceSessionActiveRef = useRef(false);
   const voiceTurnProcessingRef = useRef(false);
+  const requestQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const queuedRequestKeysRef = useRef(new Set<string>());
+  const requestQueueGenerationRef = useRef(0);
   const voiceListenGenerationRef = useRef(0);
   const voiceTurnHandlerRef = useRef<(text: string) => Promise<void>>(async () => {});
   const startVoiceListeningRef = useRef<() => Promise<void>>(async () => {});
@@ -523,6 +532,7 @@ export const App: React.FC = () => {
    */
   const handleEmergencyStop = useCallback(() => {
     isStoppedRef.current = true;
+    requestQueueGenerationRef.current += 1;
     micSessionRef.current.stop();
     gnaniWsRef.current?.disconnect();
     stopAllSpeech();
@@ -604,6 +614,19 @@ export const App: React.FC = () => {
     if (!isStoppedRef.current) {
       setStatus("idle");
     }
+  };
+
+  const getActionOutcomeSpeech = (action: PlannerAction, snapshot: PageSnapshot): string => {
+    if (action.action === "click" || action.action === "type" || action.action === "select") {
+      const target = snapshot.interactiveElements.find((element) => element.id === action.id);
+      const label = target?.label?.trim() || "field";
+      if (action.action === "click") return `Clicked ${label}.`;
+      if (action.action === "select") return `Updated the ${label} selection.`;
+      return `Filled the ${label} field.`;
+    }
+    if (action.action === "scroll") return `Scrolled ${action.direction}.`;
+    if (action.action === "navigate") return "Opened the requested page.";
+    return action.action === "done" ? action.summary : action.action === "ask_user" ? action.question : "Action completed.";
   };
 
   const askNextFormField = async () => {
@@ -720,13 +743,14 @@ export const App: React.FC = () => {
             spokenSummary: `Filled ${field.label}.`,
             timestamp: Date.now(),
           }]);
+          await speakStatus(`Filled ${field.label}.`);
         }
       }
       session.completed.add(field.fingerprint);
 
       const updatedSnapshot = (response?.freshSnapshot || await fetchPageSnapshot(session.tabId)) as PageSnapshot;
       const refreshed = collectFormFields(updatedSnapshot);
-      session.skippedManualCount = Math.max(session.skippedManualCount, refreshed.manualCount);
+      session.skippedManualCount = Math.max(session.skippedManualCount, refreshed.manualFields.length);
       session.fields = refreshed.fields.filter((candidateField) => !session.completed.has(candidateField.fingerprint));
       session.index = 0;
 
@@ -761,13 +785,29 @@ export const App: React.FC = () => {
   };
 
   const handleUserRequestSafely = async (text: string) => {
-    try {
-      await handleUserRequest(text);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Browse Voice could not complete that request.";
-      setStatus("idle");
-      setStatusText(message);
-    }
+    const requestKey = text.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+    if (!requestKey || queuedRequestKeysRef.current.has(requestKey)) return;
+    queuedRequestKeysRef.current.add(requestKey);
+    const generation = requestQueueGenerationRef.current;
+    const queuedRun = requestQueueRef.current.then(async () => {
+      if (generation !== requestQueueGenerationRef.current) {
+        queuedRequestKeysRef.current.delete(requestKey);
+        return;
+      }
+      try {
+        await handleUserRequest(text);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Browse Voice could not complete that request.";
+        setStatus("idle");
+        setStatusText(message);
+      } finally {
+        queuedRequestKeysRef.current.delete(requestKey);
+      }
+    });
+    requestQueueRef.current = queuedRun.catch(() => {
+      queuedRequestKeysRef.current.delete(requestKey);
+    });
+    await queuedRun;
   };
 
   /**
@@ -1219,6 +1259,9 @@ export const App: React.FC = () => {
 
     let stepCount = resumeExistingTask ? stepsRef.current.length : 0;
     const MAX_STEPS = 15;
+    let refreshedAfterStaleElement = false;
+    let lastSuccessfulRepeatableAction: string | null = null;
+    let lastSkippedRepeatedAction: string | null = null;
 
     while (stepCount < MAX_STEPS) {
       if (isStoppedRef.current) break;
@@ -1268,6 +1311,20 @@ export const App: React.FC = () => {
             rationale: "भुगतान की पुष्टि के लिए रसीद दिखाई देनी चाहिए।",
           };
         }
+      }
+
+      const repeatableActionKey = getRepeatableActionKey(action);
+      if (repeatableActionKey && repeatableActionKey === lastSuccessfulRepeatableAction) {
+        if (repeatableActionKey === lastSkippedRepeatedAction) {
+          await speakStatus("I already completed that action, so I stopped before repeating it again.");
+          break;
+        }
+        lastSkippedRepeatedAction = repeatableActionKey;
+        const duplicateNotice = "I already completed that exact action. I will not repeat it.";
+        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: duplicateNotice }].slice(-6);
+        await speakStatus(duplicateNotice);
+        currentSnapshot = await fetchPageSnapshot(activeTabId);
+        continue;
       }
 
       // 3. Inspect Action Safety
@@ -1364,6 +1421,18 @@ export const App: React.FC = () => {
 
       if (!execResponse?.ok) {
         const err = execResponse?.error || "Action execution failed.";
+        if (/element id \[\d+\] was not found in the current page/i.test(err) && !refreshedAfterStaleElement) {
+          refreshedAfterStaleElement = true;
+          setStatus("thinking");
+          setStatusText(translate("Page changed; refreshing before retrying...", "पेज बदल गया है; दोबारा कोशिश करने से पहले रीफ़्रेश कर रहे हैं..."));
+          try {
+            currentSnapshot = await fetchPageSnapshot(activeTabId);
+            stepCount -= 1;
+            continue;
+          } catch {
+            // Fall through and report the original action failure if the page cannot be refreshed.
+          }
+        }
         setSteps((prev) => [
           ...prev,
           {
@@ -1378,22 +1447,25 @@ export const App: React.FC = () => {
         break;
       }
 
+      lastSuccessfulRepeatableAction = repeatableActionKey;
+      lastSkippedRepeatedAction = null;
+
       // Record successful step
-      const rationaleText = action.rationale || `Executed ${action.action}`;
-      conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: rationaleText }].slice(-6);
+      const outcomeSpeech = getActionOutcomeSpeech(action, currentSnapshot);
+      conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: outcomeSpeech }].slice(-6);
       setSteps((prev) => [
         ...prev,
         {
           stepNumber: stepCount,
           action,
           status: "success",
-          spokenSummary: rationaleText,
+          spokenSummary: outcomeSpeech,
           timestamp: Date.now(),
         },
       ]);
 
-      // 5. Timbre speaks short sentence about what it is doing
-      await speakStatus(rationaleText);
+      // Speak the result after the page action has completed.
+      await speakStatus(outcomeSpeech);
 
       // Re-observe
       if (execResponse.freshSnapshot) {
@@ -1558,7 +1630,7 @@ export const App: React.FC = () => {
           await speakStatus("I cancelled that action.");
         }
       } else {
-        await handleUserRequest(text);
+        await handleUserRequestSafely(text);
       }
     } catch (error) {
       setStatus("idle");
