@@ -14,7 +14,6 @@
 import { getElementById } from "./observer";
 import type { PlannerAction } from "../lib/schema";
 import { detectSensitiveField } from "../lib/safety";
-import { setExactTextValue } from "../lib/form-values";
 
 export interface ExecutionResult {
   success: boolean;
@@ -51,6 +50,8 @@ export async function waitForPageSettle(timeoutMs: number = 2000): Promise<{ set
   let lastMutationAt = performance.now();
 
   return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout>;
+
     const observer = new MutationObserver(() => {
       lastMutationAt = performance.now();
     });
@@ -82,10 +83,10 @@ export async function waitForPageSettle(timeoutMs: number = 2000): Promise<{ set
         return;
       }
 
-      setTimeout(check, 100);
+      timer = setTimeout(check, 100);
     };
 
-    setTimeout(check, 250);
+    timer = setTimeout(check, 250);
   });
 }
 
@@ -162,7 +163,7 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
         el.focus();
 
         if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-          setExactTextValue(el, action.text);
+          el.value = action.text;
           el.dispatchEvent(new InputEvent("input", { bubbles: true, data: action.text }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
         } else {

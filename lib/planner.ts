@@ -13,12 +13,6 @@ import {
 } from "./schema.ts";
 import type { PageSnapshot, InteractiveElement } from "./safety.ts";
 import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "./payment-state.ts";
-import {
-  extractExactValueCandidates,
-  contextFromElement,
-  preserveExactPlannerValue,
-  resolveFormValue,
-} from "./form-values.ts";
 
 export interface StepLogEntry {
   stepNumber: number;
@@ -41,22 +35,6 @@ export interface PlannerProvider {
   readonly id: string;
   readonly name: string;
   plan(request: PlannerRequest): Promise<PlannerAction>;
-}
-
-/**
- * Applies a deterministic exact-value guard after any model has planned an
- * action. The model can identify the field and intent, but it is never allowed
- * to rewrite a value that the user supplied.
- */
-export function protectPlannerAction(request: PlannerRequest, action: PlannerAction): PlannerAction {
-  if (action.action !== "type") return action;
-  const target = request.snapshot.interactiveElements.find((element) => element.id === action.id);
-  const latestUserTurn = [...(request.conversation || [])].reverse().find((turn) => turn.role === "user")?.content;
-  const sourceText = latestUserTurn && latestUserTurn !== request.userRequest
-    ? `${request.userRequest}\n${latestUserTurn}`
-    : request.userRequest;
-  const protectedAction = preserveExactPlannerValue(action, sourceText, target);
-  return protectedAction as PlannerAction;
 }
 
 export interface LLMConfig {
@@ -263,10 +241,7 @@ RULES:
 5. If the user's goal is accomplished on the current screen, return action "done".
    For payment tasks, NEVER claim payment is complete unless the currently visible page shows a successful payment receipt with a transaction ID. A payment form or a "continue to payment" page is not completion.
    Never click, read, or fill card, CVV, OTP, password, or other sensitive payment fields. Ask the user to handle those fields manually.
-6. Treat values as data, not prose. For email addresses, UPI IDs, URLs/domains, phone numbers, OTPs, account references, usernames, passwords, API keys, codes, and other technical identifiers, copy every character exactly as supplied. Never translate, transliterate, normalize case, replace punctuation, or spell out these values.
-7. Use the target field's label, name, type, autocomplete, placeholder, and role to decide whether it expects an exact identifier. Keep ordinary Hindi/Marathi/English sentences natural in regular text fields.
-8. If an exact identifier field is requested but the exact identifier is not present or is only a phonetic/non-Latin transcription, return ask_user asking the user to repeat or confirm the exact value. Never guess.
-9. Output raw JSON only with NO markdown wrappers or extra commentary.`;
+6. Output raw JSON only with NO markdown wrappers or extra commentary.`;
 
 /**
  * LLM Provider communicating with OpenAI / OpenRouter / DeepSeek / Groq compatible APIs.
@@ -332,13 +307,13 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
     const validation = parseAndValidatePlannerJson(content);
     if (!validation.valid) {
       // Retry turn with correction prompt
-      return this.retryCorrection(content, validation.error, request);
+      return this.retryCorrection(content, validation.error);
     }
 
-    return protectPlannerAction(request, validation.action);
+    return validation.action;
   }
 
-  private async retryCorrection(invalidRaw: string, errorMsg: string, request?: PlannerRequest): Promise<PlannerAction> {
+  private async retryCorrection(invalidRaw: string, errorMsg: string): Promise<PlannerAction> {
     const correctionMessages = [
       { role: "system", content: PLANNER_SYSTEM_PROMPT },
       {
@@ -370,7 +345,7 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
       throw new Error(`Planner LLM failed schema validation twice: ${result.error}`);
     }
 
-    return request ? protectPlannerAction(request, result.action) : result.action;
+    return result.action;
   }
 }
 
@@ -383,10 +358,6 @@ export function buildPlannerPrompt(
 ): string {
   const maxElements = limits.maxElements ?? 24;
   const maxSummaryLength = limits.maxSummaryLength ?? 240;
-  const identifierHints = extractExactValueCandidates(request.userRequest).map((candidate) => ({
-    value: candidate.value,
-    kind: candidate.kind,
-  }));
   const words = request.userRequest.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || [];
   const taskTerms = new Set(words.filter((word) => !["the", "and", "for", "from", "with", "play", "video", "please", "करो", "करना"].includes(word)));
   const allElements = request.snapshot.interactiveElements;
@@ -406,10 +377,6 @@ export function buildPlannerPrompt(
       role: el.role.slice(0, 24),
       label: el.label.slice(0, 90),
       type: el.type,
-      name: el.name,
-      placeholder: el.placeholder,
-      autocomplete: el.autocomplete,
-      inputMode: el.inputMode,
       value: (el.value || "").slice(0, 80),
       isSensitive: el.isSensitive,
     }));
@@ -423,7 +390,6 @@ export function buildPlannerPrompt(
 
   return JSON.stringify({
     userRequest: request.userRequest.slice(0, 500),
-      exactIdentifierHints: identifierHints,
       recentConversation: (request.conversation || []).slice(-6).map((turn) => ({
         role: turn.role,
         content: turn.content.slice(0, 180),
@@ -501,13 +467,13 @@ export class GeminiPlanner implements PlannerProvider {
 
     const validation = parseAndValidatePlannerJson(content);
     if (!validation.valid) {
-      return this.retryCorrection(content, validation.error, request);
+      return this.retryCorrection(content, validation.error);
     }
 
-    return protectPlannerAction(request, validation.action);
+    return validation.action;
   }
 
-  private async retryCorrection(invalidRaw: string, errorMsg: string, request?: PlannerRequest): Promise<PlannerAction> {
+  private async retryCorrection(invalidRaw: string, errorMsg: string): Promise<PlannerAction> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
     const correctionText = `Your previous response was invalid JSON or violated schema: "${errorMsg}".\nPrevious response: ${invalidRaw}\nPlease correct it and return ONLY valid JSON.`;
 
@@ -529,7 +495,7 @@ export class GeminiPlanner implements PlannerProvider {
       throw new Error(`Gemini LLM failed schema validation twice: ${result.error}`);
     }
 
-    return request ? protectPlannerAction(request, result.action) : result.action;
+    return result.action;
   }
 }
 
@@ -543,9 +509,6 @@ export class MockRuleBasedPlanner implements PlannerProvider {
   readonly name = "Mock / Rule-Based Planner (Demo & Tests)";
 
   public async plan(request: PlannerRequest): Promise<PlannerAction> {
-    const originalRequest = [...(request.conversation || [])]
-      .reverse()
-      .find((message) => message.role === "user")?.content || request.userRequest;
     const latestUserRequest = [...(request.conversation || [])]
       .reverse()
       .find((message) => message.role === "user")?.content || request.userRequest;
@@ -630,26 +593,6 @@ export class MockRuleBasedPlanner implements PlannerProvider {
           rationale: "Moving to payment.",
         };
       }
-    }
-
-    // Exact-value fields are resolved from the utterance and DOM context before
-    // any generic command heuristics. This keeps the offline/demo planner safe
-    // and gives it the same identifier behavior as the LLM planners.
-    const exactField = elements.find((element) => {
-      if (!(["input", "textarea"].includes(element.tag)) || element.isSensitive) return false;
-      const decision = resolveFormValue(originalRequest, contextFromElement(element));
-      const fieldTerms = `${element.label} ${element.name || ""} ${element.placeholder || ""}`
-        .toLowerCase().match(/[a-z0-9]{3,}/g) || [];
-      const fieldMentioned = fieldTerms.some((term) => originalRequest.toLowerCase().includes(term));
-      return decision.requiresExactValue && (decision.exactValue !== undefined || (decision.ambiguous && fieldMentioned));
-    });
-    if (exactField) {
-      const protectedAction = preserveExactPlannerValue(
-        { action: "type", id: exactField.id, text: originalRequest },
-        originalRequest,
-        exactField,
-      );
-      return protectedAction as PlannerAction;
     }
 
     // 5. Consumer Number Typing Intent ("mera consumer number 100234567 daalo", "fill consumer number")

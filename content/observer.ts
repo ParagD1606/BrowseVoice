@@ -195,8 +195,6 @@ export function capturePageSnapshot(): PageSnapshot {
       type,
       name,
       placeholder,
-      autocomplete: el.getAttribute("autocomplete") || undefined,
-      inputMode: el.getAttribute("inputmode") || undefined,
       value: safeValue,
       checked: el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio") ? el.checked : undefined,
       options: el instanceof HTMLSelectElement
