@@ -27,12 +27,6 @@ It can be useful for anyone who wants a little more guidance while using the web
 
 If something is unclear or information is missing, Browse Voice can ask a follow-up question. You can stop it at any time.
 
-### Autonomous multi-tab tasks
-
-For research and other multi-source requests, Browse Voice uses a central autonomous orchestrator. It decomposes the objective into worker subtasks, opens and tracks managed tabs, and runs independent workers concurrently. Workers read the current page through the existing content script and publish timestamped findings into one versioned shared memory. Every worker receives a fresh shared-memory projection before planning its next action, so findings discovered in one tab are available to the others.
-
-The shared task state is persisted in extension storage and includes the objective, plan, worker/tab assignments, findings, observations, decisions, conversation, errors, and progress. Reopening the side panel can recover an interrupted task. The panel shows worker status, managed tab IDs, live findings, memory version, and controls to view or close agent-created tabs. Consequential actions still use the existing confirmation and sensitive-field safeguards.
-
 ## You stay in control
 
 - Browse Voice asks you for the information it needs and works through tasks in visible steps.

@@ -16,7 +16,7 @@ export interface SiteChatConfig {
 }
 
 export interface SiteIndexRequest {
-  url: string;
+  startUrl: string;
   scope: "origin";
   maxPages: number;
 }

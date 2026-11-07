@@ -252,16 +252,6 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
         };
       }
 
-      case "open_tab": {
-        return {
-          success: false,
-          action,
-          error: "The open_tab action must be coordinated by the autonomous orchestrator.",
-          settled: true,
-          waitedMs: 0,
-        };
-      }
-
       case "ask_user":
       case "done":
         return {

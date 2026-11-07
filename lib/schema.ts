@@ -7,7 +7,6 @@
  *  - select(id, value)
  *  - scroll(direction)
  *  - navigate(url)
- *  - open_tab(url, task)
  *  - ask_user(question)
  *  - done(summary)
  */
@@ -18,7 +17,6 @@ export type ActionType =
   | "select"
   | "scroll"
   | "navigate"
-  | "open_tab"
   | "ask_user"
   | "done";
 
@@ -57,13 +55,6 @@ export interface NavigateAction {
   rationale?: string;
 }
 
-export interface OpenTabAction {
-  action: "open_tab";
-  url: string;
-  task?: string;
-  rationale?: string;
-}
-
 export interface AskUserAction {
   action: "ask_user";
   question: string;
@@ -83,7 +74,6 @@ export type PlannerAction =
   | SelectAction
   | ScrollAction
   | NavigateAction
-  | OpenTabAction
   | AskUserAction
   | DoneAction;
 
@@ -145,15 +135,6 @@ export const PLANNER_JSON_SCHEMA = {
       properties: {
         action: { const: "navigate" },
         url: { type: "string", format: "uri" },
-        rationale: { type: "string" },
-      },
-      required: ["action", "url"],
-    },
-    {
-      properties: {
-        action: { const: "open_tab" },
-        url: { type: "string", description: "URL to open in a separate browser tab" },
-        task: { type: "string", description: "Optional worker task for the new tab" },
         rationale: { type: "string" },
       },
       required: ["action", "url"],
@@ -236,14 +217,6 @@ export function validatePlannerAction(input: unknown): ValidationResult {
       return { valid: true, action: { action: "navigate", url: raw.url.trim(), rationale } };
     }
 
-    case "open_tab": {
-      if (typeof raw.url !== "string" || raw.url.trim().length === 0) {
-        return { valid: false, error: "action 'open_tab' requires a non-empty string 'url'." };
-      }
-      const task = typeof raw.task === "string" && raw.task.trim() ? raw.task.trim() : undefined;
-      return { valid: true, action: { action: "open_tab", url: raw.url.trim(), task, rationale } };
-    }
-
     case "ask_user": {
       if (typeof raw.question !== "string" || raw.question.trim().length === 0) {
         return { valid: false, error: "action 'ask_user' requires a non-empty string 'question'." };
@@ -264,7 +237,7 @@ export function validatePlannerAction(input: unknown): ValidationResult {
     default:
       return {
         valid: false,
-        error: `Unknown action '${String(action)}'. Allowed actions: click, type, select, scroll, navigate, open_tab, ask_user, done.`,
+        error: `Unknown action '${String(action)}'. Allowed actions: click, type, select, scroll, navigate, ask_user, done.`,
       };
   }
 }
