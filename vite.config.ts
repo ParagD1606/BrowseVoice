@@ -27,25 +27,6 @@ export default defineConfig({
           copyFileSync("content/overlay.css", "dist/content/overlay.css");
         }
 
-        // Tesseract runs in a local extension worker; MV3 disallows its default
-        // remotely hosted worker script. Bundle the worker/core beside the UI.
-        mkdirSync("dist/ocr", { recursive: true });
-        mkdirSync("dist/ocr/lang", { recursive: true });
-        copyFileSync("node_modules/tesseract.js/dist/worker.min.js", "dist/ocr/worker.min.js");
-        for (const file of [
-          "tesseract-core.wasm.js", "tesseract-core.wasm",
-          "tesseract-core-simd.wasm.js", "tesseract-core-simd.wasm",
-          "tesseract-core-lstm.wasm.js", "tesseract-core-lstm.wasm",
-          "tesseract-core-simd-lstm.wasm.js", "tesseract-core-simd-lstm.wasm",
-          "tesseract-core-relaxedsimd.wasm.js", "tesseract-core-relaxedsimd.wasm",
-          "tesseract-core-relaxedsimd-lstm.wasm.js", "tesseract-core-relaxedsimd-lstm.wasm",
-        ]) {
-          copyFileSync(`node_modules/tesseract.js-core/${file}`, `dist/ocr/${file}`);
-        }
-        for (const language of ["eng", "hin", "mar"]) {
-          copyFileSync(`ocr-data/${language}.traineddata.gz`, `dist/ocr/lang/${language}.traineddata.gz`);
-        }
-
         // Copy mock-portal
         if (existsSync("mock-portal")) {
           cpSync("mock-portal", "dist/mock-portal", { recursive: true });

@@ -138,7 +138,7 @@ export interface SnipAnswer {
   provider: string;
 }
 
-const SNIP_ANSWER_SYSTEM_PROMPT = `You are Browse Voice, a visual assistant. Answer the user's specific question using the selected image, OCR text, visible page text, and page context together. For questions like "what is written here?", transcribe the readable text exactly, then briefly identify what it represents when the image makes that clear. For questions asking what something means or does, explain it in plain language using only evidence in the selected area. Distinguish OCR uncertainty from certain text; do not invent missing words or describe the whole page when only a small crop was selected. Use natural plain text without Markdown bold or decorative formatting. Be concise, answer in the user's language, and mention when the crop is too unclear to read.`;
+const SNIP_ANSWER_SYSTEM_PROMPT = `You are Browse Voice, a helpful visual browser assistant. Answer the user's question using the selected browser snippets as the primary source. Each snippet includes a screenshot and may include extracted page text and element labels. Be concise, accurate, and say when the selected area does not contain enough information. Do not claim to have read anything outside the snippets. Answer in the user's language or Hinglish when appropriate.`;
 
 function buildSnipContextText(question: string, snips: SnipContext[]): string {
   const context = snips.map((snip, index) => ({
