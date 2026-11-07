@@ -16,7 +16,7 @@ import {
 } from "./safety.ts";
 import type { PlannerAction } from "./schema.ts";
 
-export type WorkerStatus = "pending" | "assigned" | "opening_tab" | "navigating" | "inspecting" | "executing" | "waiting" | "verifying" | "retrying" | "completed" | "failed" | "cancelled";
+export type WorkerStatus = "pending" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 export type OrchestratorStatus = "idle" | "running" | "waiting" | "completed" | "failed" | "cancelled";
 export type WorkerWaitReason = "user_input" | "confirmation" | "tab_unavailable";
 
@@ -26,8 +26,6 @@ export interface SubtaskSpec {
   instruction: string;
   startUrl?: string;
   dependsOn?: string[];
-  searchQuery?: string;
-  expectedOutcome?: string;
 }
 
 export interface OrchestratedSubtask extends SubtaskSpec {
@@ -40,9 +38,6 @@ export interface OrchestratedSubtask extends SubtaskSpec {
   error?: string;
   waitReason?: WorkerWaitReason;
   pendingAction?: PlannerAction;
-  searchExecuted?: boolean;
-  verification?: string;
-  currentAction?: string;
   startedAt?: number;
   completedAt?: number;
 }
@@ -136,8 +131,6 @@ export interface OrchestratorOptions {
   maxConcurrentWorkers?: number;
   maxStepsPerWorker?: number;
   maxRetries?: number;
-  maxLlmRetries?: number;
-  plannerMinIntervalMs?: number;
   subtasks?: SubtaskSpec[];
   decompose?: (instruction: string) => Promise<SubtaskSpec[]>;
 }
@@ -168,89 +161,6 @@ function safeWebUrl(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function canonicalWebUrl(value: string | undefined): string | undefined {
-  const safe = safeWebUrl(value);
-  if (!safe) return undefined;
-  try {
-    const url = new URL(safe);
-    url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
-    url.hash = "";
-    return url.href.replace(/\/$/, "");
-  } catch {
-    return safe;
-  }
-}
-
-function inferUrl(value: string): string | undefined {
-  const candidate = value.match(/https?:\/\/[^\s)\]}>,]+/i)?.[0]?.replace(/[.,!?]+$/, "");
-  return safeWebUrl(candidate);
-}
-
-function destinationFingerprint(spec: SubtaskSpec): string | undefined {
-  const url = canonicalWebUrl(spec.startUrl) || canonicalWebUrl(inferUrl(`${spec.title} ${spec.instruction}`));
-  if (url) return url;
-  const destination = spec.instruction.match(/\b(?:on|at|from)\s+(?:the\s+)?([\p{L}\p{N}][\p{L}\p{N} ._-]*)$/iu)?.[1];
-  return destination ? [...normalizedTaskTokens(destination)].sort().join("|") : undefined;
-}
-
-function normalizedTaskTokens(value: string): Set<string> {
-  const ignored = new Set(["the", "and", "for", "from", "with", "into", "that", "this", "on", "in", "at", "to", "a", "an", "one", "another", "tab", "tabs", "open", "opened", "search", "find", "look", "up"]);
-  return new Set((value.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || []).filter((token) => !ignored.has(token)));
-}
-
-/** Recovers an explicit search value from a workflow when the decomposer did not fill searchQuery. */
-function inferSearchQuery(instruction: string): string | undefined {
-  const quoted = instruction.match(/\b(?:search|find|look\s+up|query)\b[^"“”']*["“”']([^"“”']+)["“”']/i)?.[1];
-  if (quoted?.trim()) return quoted.trim();
-  const beforeDestination = instruction.match(/\b(?:search|find|look\s+up|query)\b(?:\s+(?:for|about))?\s+(.+?)\s+\b(?:on|in|at)\b/i)?.[1];
-  if (beforeDestination?.trim()) return beforeDestination.trim().replace(/[.,!?]+$/, "");
-  const atEnd = instruction.match(/\b(?:search|find|look\s+up|query)\b(?:\s+(?:for|about))?\s+(.+?)\s*$/i)?.[1];
-  if (!atEnd || /^(?:on|in|at)\b/i.test(atEnd.trim())) return undefined;
-  return atEnd.trim().replace(/[.,!?]+$/, "") || undefined;
-}
-
-function findSearchInput(snapshot: PageSnapshot): PageSnapshot["interactiveElements"][number] | undefined {
-  return snapshot.interactiveElements
-    .filter((element) => ["input", "textarea"].includes(element.tag) && !element.isSensitive)
-    .map((element) => {
-      const context = `${element.label} ${element.name || ""} ${element.placeholder || ""} ${element.type || ""} ${element.role}`.toLowerCase();
-      const score = Number(element.type === "search") * 10 + Number(/search|query|find|look up|खोज/i.test(context)) * 8 + Number(element.tag === "input") * 2;
-      return { element, score };
-    })
-    .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .map((candidate) => candidate.element)[0];
-}
-
-function findSearchSubmit(snapshot: PageSnapshot): PageSnapshot["interactiveElements"][number] | undefined {
-  return snapshot.interactiveElements
-    .filter((element) => element.tag === "button" || element.role === "button" || element.type === "submit")
-    .map((element) => {
-      const context = `${element.label} ${element.name || ""} ${element.placeholder || ""}`.toLowerCase();
-      const score = Number(/search|find|go|submit|enter|खोज/i.test(context)) * 10 + Number(element.type === "submit") * 3;
-      return { element, score };
-    })
-    .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .map((candidate) => candidate.element)[0];
-}
-
-function isSimpleSearchWorkflow(subtask: OrchestratedSubtask): boolean {
-  const text = `${subtask.instruction} ${subtask.expectedOutcome || ""}`;
-  return !/\b(compare|collect|extract|summari[sz]e|report|analy[sz]e|list|relevant|price|details)\b/i.test(text);
-}
-
-function sameWorkflow(a: SubtaskSpec, b: SubtaskSpec): boolean {
-  const firstDestination = destinationFingerprint(a);
-  const secondDestination = destinationFingerprint(b);
-  if (!firstDestination || !secondDestination || firstDestination !== secondDestination) return false;
-  if (a.searchQuery && b.searchQuery && a.searchQuery.trim().toLowerCase() !== b.searchQuery.trim().toLowerCase()) return false;
-  const first = normalizedTaskTokens(`${a.title} ${a.instruction}`);
-  const second = normalizedTaskTokens(`${b.title} ${b.instruction}`);
-  if (!first.size || !second.size) return true;
-  return [...first].every((token) => second.has(token)) || [...second].every((token) => first.has(token));
 }
 
 /**
@@ -287,40 +197,24 @@ function normalizeSubtasks(specs: SubtaskSpec[], instruction: string): SubtaskSp
       id: uniqueId,
       title: String(spec.title || `Worker ${index + 1}`),
       instruction: String(spec.instruction || instruction),
-      startUrl: safeWebUrl(spec.startUrl) || inferUrl(String(spec.instruction || "")),
+      startUrl: safeWebUrl(spec.startUrl),
       dependsOn: Array.isArray(spec.dependsOn) ? spec.dependsOn.map(String).filter((dependency) => dependency !== uniqueId) : [],
-      searchQuery: typeof spec.searchQuery === "string" && spec.searchQuery.trim() ? spec.searchQuery.trim() : inferSearchQuery(String(spec.instruction || "")),
-      expectedOutcome: typeof spec.expectedOutcome === "string" && spec.expectedOutcome.trim() ? spec.expectedOutcome.trim() : undefined,
     };
   });
-  const deduplicated: SubtaskSpec[] = [];
-  for (const spec of normalized) {
+  const deduplicated = normalized.filter((spec, index, all) => {
     const signature = [
-      canonicalWebUrl(spec.startUrl) || "",
+      spec.startUrl || "",
       spec.title.trim().toLowerCase().replace(/\s+/g, " "),
       spec.instruction.trim().toLowerCase().replace(/\s+/g, " "),
     ].join("|");
-    const duplicate = deduplicated.find((candidate) => {
-      const candidateSignature = [
-        canonicalWebUrl(candidate.startUrl) || "",
-        candidate.title.trim().toLowerCase().replace(/\s+/g, " "),
-        candidate.instruction.trim().toLowerCase().replace(/\s+/g, " "),
-      ].join("|");
-      return candidateSignature === signature || sameWorkflow(candidate, spec);
-    });
-    if (!duplicate) {
-      deduplicated.push(spec);
-    } else {
-      // Keep the richer workflow description and preserve any structured
-      // search/verification fields from either equivalent model output.
-      if (spec.instruction.length > duplicate.instruction.length) duplicate.instruction = spec.instruction;
-      if (spec.title.length > duplicate.title.length) duplicate.title = spec.title;
-      duplicate.searchQuery ||= spec.searchQuery;
-      duplicate.expectedOutcome ||= spec.expectedOutcome;
-    }
-  }
+    return all.findIndex((candidate) => [
+      candidate.startUrl || "",
+      candidate.title.trim().toLowerCase().replace(/\s+/g, " "),
+      candidate.instruction.trim().toLowerCase().replace(/\s+/g, " "),
+    ].join("|") === signature) === index;
+  });
   const known = new Set(deduplicated.map((spec) => spec.id));
-  return deduplicated.map((spec) => ({ ...spec, dependsOn: (spec.dependsOn || []).filter((dependency) => known.has(dependency)) }));
+  return deduplicated.map((spec) => ({ ...spec, dependsOn: spec.dependsOn.filter((dependency) => known.has(dependency)) }));
 }
 
 export function createInitialTaskMemory(
@@ -328,18 +222,13 @@ export function createInitialTaskMemory(
   subtasks: SubtaskSpec[] = [{ id: "primary", title: "Primary task", instruction }],
   now = Date.now(),
 ): SharedTaskMemory {
-  const sharedSearchQuery = inferSearchQuery(instruction);
-  const normalizedSpecs = normalizeSubtasks(subtasks, instruction).map((spec) => ({
-    ...spec,
-    searchQuery: spec.searchQuery || (sharedSearchQuery && /\b(search|find|look\s+up|query)\b/i.test(`${spec.title} ${spec.instruction}`) ? sharedSearchQuery : undefined),
-  }));
   return {
     version: 0,
     taskId: createId("task"),
     originalInstruction: instruction,
     objective: instruction,
     status: "idle",
-    subtasks: normalizedSpecs.map((spec) => ({
+    subtasks: normalizeSubtasks(subtasks, instruction).map((spec) => ({
       ...spec,
       dependsOn: spec.dependsOn || [],
       status: "pending",
@@ -442,75 +331,24 @@ export class SharedMemoryStore {
   }
 }
 
-function isRateLimitError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /(?:\b429\b|rate[_ -]?limit|too many requests|tokens? per minute|temporarily unavailable)/i.test(message);
-}
-
-function retryAfterMilliseconds(error: unknown, attempt: number): number {
-  const message = error instanceof Error ? error.message : String(error);
-  const seconds = message.match(/(?:retry[-_ ]after|retry again in|retry_after)[^\d]*(\d+(?:\.\d+)?)/i)?.[1];
-  if (seconds) return Math.min(60_000, Math.max(500, Math.ceil(Number(seconds) * 1000) + Math.round(Math.random() * 250)));
-  return Math.min(30_000, 1_000 * (2 ** attempt) + Math.round(Math.random() * 250));
-}
-
-/** Serializes provider calls and retries only rate-limit failures. */
-class LlmRequestScheduler {
-  private queue: Promise<void> = Promise.resolve();
-  private readonly maxRetries: number;
-  private readonly minIntervalMs: number;
-  private lastCompletedAt = 0;
-
-  constructor(maxRetries = 2, minIntervalMs = 0) {
-    this.maxRetries = Math.max(0, Math.min(5, maxRetries));
-    this.minIntervalMs = Math.max(0, Math.min(60_000, minIntervalMs));
-  }
-
-  public schedule<T>(operation: () => Promise<T>): Promise<T> {
-    let result: T | undefined;
-    let failure: unknown;
-    const run = async () => {
-      for (let attempt = 0; ; attempt += 1) {
-        const waitMs = this.minIntervalMs - (Date.now() - this.lastCompletedAt);
-        if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
-        try {
-          result = await operation();
-          this.lastCompletedAt = Date.now();
-          return;
-        } catch (error) {
-          failure = error;
-          if (!isRateLimitError(error) || attempt >= this.maxRetries) throw error;
-          await new Promise((resolve) => setTimeout(resolve, retryAfterMilliseconds(error, attempt)));
-        }
-      }
-    };
-    const next = this.queue.then(run, run);
-    this.queue = next.then(() => undefined, () => undefined);
-    return next.then(() => result as T, () => { throw failure; });
-  }
-}
-
 export function formatSharedMemoryForWorker(state: SharedTaskMemory, workerId?: string): string {
   return JSON.stringify({
     taskId: state.taskId,
     objective: state.objective,
     currentWorker: workerId,
-    plan: state.subtasks.map(({ id, title, status, result, error, tabId, searchQuery, expectedOutcome, verification, currentAction }) => ({ id, title, status, result, error, tabId, searchQuery, expectedOutcome, verification, currentAction })),
-    findings: state.findings.slice(-12).map(({ id, workerId: sourceWorker, subtaskId, title, content, sourceUrl, createdAt }) => ({ id, workerId: sourceWorker, subtaskId, title, content: content.slice(0, 500), sourceUrl, createdAt })),
-    recentObservations: state.observations.slice(-8).map((observation) => ({ ...observation, summary: observation.summary.slice(0, 500) })),
+    plan: state.subtasks.map(({ id, title, status, result, error, tabId }) => ({ id, title, status, result, error, tabId })),
+    findings: state.findings.slice(-40).map(({ id, workerId: sourceWorker, subtaskId, title, content, sourceUrl, createdAt }) => ({ id, workerId: sourceWorker, subtaskId, title, content, sourceUrl, createdAt })),
+    recentObservations: state.observations.slice(-20),
     decisions: state.decisions.slice(-20),
     errors: state.errors.slice(-20),
     memoryVersion: state.version,
-  }, null, 2).slice(0, 6000);
+  }, null, 2).slice(0, 14000);
 }
 
 const DECOMPOSER_PROMPT = `You are the task decomposer for Browse Voice, a multi-tab browser agent.
-Break the user's objective into independent, end-to-end browser workflows.
-Each subtask owns one coherent workflow and its tab: opening/navigating, interacting, verifying, and reporting are steps of the same workflow, never separate subtasks.
-If the user asks for the same operation on multiple destinations, create exactly one workflow per destination. Never create duplicate or action-only subtasks.
-Return JSON only: {"subtasks":[{"id":"stable-id","title":"short title","instruction":"complete workflow instruction","startUrl":"canonical URL when a destination is identified","searchQuery":"exact query when this workflow explicitly searches","expectedOutcome":"verifiable outcome","dependsOn":["other-id"]}]}.
-Resolve named destinations to their canonical web URLs when possible; do not create a separate subtask just to open or navigate to a destination.
-Use a single subtask when parallel work is not useful. Preserve exact user values, including search queries. Do not invent facts. Do not put credentials or secrets into startUrl. Keep instructions generic and actionable. IDs must be unique.`;
+Break the user's objective into independent or dependency-ordered browser subtasks.
+Return JSON only: {"subtasks":[{"id":"stable-id","title":"short title","instruction":"precise worker instruction","startUrl":"optional URL","dependsOn":["other-id"]}]}.
+Use a single subtask when parallel work is not useful. Do not invent facts. Do not put credentials or secrets into startUrl. Keep instructions generic and actionable. IDs must be unique.`;
 
 function parseSubtaskResponse(raw: string, instruction: string): SubtaskSpec[] {
   let parsed: unknown;
@@ -532,8 +370,6 @@ function parseSubtaskResponse(raw: string, instruction: string): SubtaskSpec[] {
       instruction: String(item.instruction || instruction),
       startUrl: safeWebUrl(item.startUrl),
       dependsOn: Array.isArray(item.dependsOn) ? item.dependsOn.map(String) : [],
-      searchQuery: typeof item.searchQuery === "string" ? item.searchQuery : undefined,
-      expectedOutcome: typeof item.expectedOutcome === "string" ? item.expectedOutcome : undefined,
     }));
   return normalizeSubtasks(specs.length ? specs : [{ id: "primary", title: "Primary task", instruction }], instruction);
 }
@@ -548,10 +384,10 @@ export async function decomposeTask(config: LLMConfig, instruction: string): Pro
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: DECOMPOSER_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: instruction }] }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 500 },
+        generationConfig: { responseMimeType: "application/json", temperature: 0.1 },
       }),
     });
-    if (!response.ok) throw new Error(`Task decomposition failed (${response.status}; Retry-After ${response.headers.get("retry-after") || "unknown"}): ${await response.text()}`);
+    if (!response.ok) throw new Error(`Task decomposition failed (${response.status}).`);
     const data = await response.json();
     const content = data?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || "").join("") || "";
     return parseSubtaskResponse(content, instruction);
@@ -565,11 +401,11 @@ export async function decomposeTask(config: LLMConfig, instruction: string): Pro
       model: config.model || "gpt-4o-mini",
       messages: [{ role: "system", content: DECOMPOSER_PROMPT }, { role: "user", content: instruction }],
       temperature: 0.1,
-      max_tokens: 500,
+      max_tokens: 700,
       response_format: { type: "json_object" },
     }),
   });
-  if (!response.ok) throw new Error(`Task decomposition failed (${response.status}; Retry-After ${response.headers.get("retry-after") || "unknown"}): ${await response.text()}`);
+  if (!response.ok) throw new Error(`Task decomposition failed (${response.status}).`);
   const data = await response.json();
   return parseSubtaskResponse(typeof data?.choices?.[0]?.message?.content === "string" ? data.choices[0].message.content : "", instruction);
 }
@@ -581,7 +417,7 @@ export async function summarizeTask(config: LLMConfig, state: SharedTaskMemory):
     objective: state.objective,
     subtasks: state.subtasks.map(({ title, instruction, status, result, error }) => ({ title, instruction, status, result, error })),
     findings: state.findings.slice(-80).map(({ title, content, sourceUrl, subtaskId }) => ({ title, content, sourceUrl, subtaskId })),
-  }, null, 2).slice(0, 10000);
+  }, null, 2).slice(0, 18000);
   if (!config.apiKey || config.provider === "mock") {
     const completed = state.subtasks.filter((subtask) => subtask.status === "completed");
     const results = completed.map((subtask) => `${subtask.title}: ${subtask.result || "completed"}`).join("\n");
@@ -596,10 +432,10 @@ export async function summarizeTask(config: LLMConfig, state: SharedTaskMemory):
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: SUMMARY_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: evidence }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 500 },
+        generationConfig: { temperature: 0.1, maxOutputTokens: 700 },
       }),
     });
-    if (!response.ok) throw new Error(`Task summary failed (${response.status}; Retry-After ${response.headers.get("retry-after") || "unknown"}): ${await response.text()}`);
+    if (!response.ok) throw new Error(`Task summary failed (${response.status}).`);
     const data = await response.json();
     const text = data?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || "").join("").trim();
     if (!text) throw new Error("The summary model returned no response.");
@@ -614,10 +450,10 @@ export async function summarizeTask(config: LLMConfig, state: SharedTaskMemory):
       model: config.model || "gpt-4o-mini",
       messages: [{ role: "system", content: SUMMARY_PROMPT }, { role: "user", content: evidence }],
       temperature: 0.1,
-      max_tokens: 500,
+      max_tokens: 700,
     }),
   });
-  if (!response.ok) throw new Error(`Task summary failed (${response.status}; Retry-After ${response.headers.get("retry-after") || "unknown"}): ${await response.text()}`);
+  if (!response.ok) throw new Error(`Task summary failed (${response.status}).`);
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content?.trim();
   if (!text) throw new Error("The summary model returned no response.");
@@ -631,7 +467,6 @@ export class AutonomousOrchestrator {
   private maxConcurrentWorkers = 8;
   private maxStepsPerWorker = 20;
   private maxRetries = 2;
-  private llmScheduler = new LlmRequestScheduler();
   private readonly activeWorkers = new Set<string>();
   private readonly claimedTabIds = new Set<number>();
   private initialized = false;
@@ -656,24 +491,15 @@ export class AutonomousOrchestrator {
     this.maxConcurrentWorkers = Math.max(1, Math.min(32, Math.round(options.maxConcurrentWorkers || 8)));
     this.maxStepsPerWorker = Math.max(1, Math.min(100, Math.round(options.maxStepsPerWorker || 20)));
     this.maxRetries = Math.max(0, Math.min(5, Math.round(options.maxRetries ?? 2)));
-    this.llmScheduler = new LlmRequestScheduler(options.maxLlmRetries ?? 2, options.plannerMinIntervalMs ?? 0);
     const current = this.memory.snapshot();
     if (current.status === "running" || current.status === "waiting") {
       throw new Error("Browse Voice already has an autonomous task in progress.");
-    }
-    this.claimedTabIds.clear();
-    if (["failed", "completed", "cancelled"].includes(current.status)) {
-      await Promise.all(current.tabs
-        .filter((tab) => tab.createdByAgent && tab.status !== "closed")
-        .map((tab) => this.dependencies.browser.removeTab(tab.tabId).catch(() => undefined)));
     }
     const directUrl = resolveDirectNewTabIntent(instruction);
     if (directUrl) return this.openDirectTab(instruction, directUrl);
     let specs = options.subtasks;
     if (!specs) {
-      specs = options.decompose
-        ? await this.llmScheduler.schedule(() => options.decompose!(instruction))
-        : [{ id: "primary", title: "Primary task", instruction }];
+      specs = options.decompose ? await options.decompose(instruction) : [{ id: "primary", title: "Primary task", instruction }];
     }
     const initial = createInitialTaskMemory(instruction, specs, this.now());
     initial.status = "running";
@@ -754,7 +580,7 @@ export class AutonomousOrchestrator {
     }
     await this.memory.commit("orchestrator", "recovered", "Recovered persisted task state after extension restart.", (next) => {
       next.subtasks.forEach((subtask) => {
-        if (!["pending", "completed", "failed", "cancelled", "waiting"].includes(subtask.status)) {
+        if (subtask.status === "running") {
           subtask.status = "pending";
           subtask.attempts += 1;
           subtask.error = "Worker resumed after extension restart.";
@@ -772,7 +598,7 @@ export class AutonomousOrchestrator {
     await this.memory.commit("user", "task-cancelled", "User stopped the autonomous task.", (state) => {
       state.status = "cancelled";
       state.subtasks.forEach((subtask) => {
-        if (!["completed", "failed", "cancelled"].includes(subtask.status)) subtask.status = "cancelled";
+        if (subtask.status === "pending" || subtask.status === "running" || subtask.status === "waiting") subtask.status = "cancelled";
       });
     });
     if (closeAgentTabs) {
@@ -848,7 +674,7 @@ export class AutonomousOrchestrator {
         tab.lastUpdatedAt = this.now();
       }
       const subtask = state.subtasks.find((candidate) => candidate.id === tracked.subtaskId);
-      if (subtask && !["pending", "completed", "failed", "cancelled"].includes(subtask.status)) {
+      if (subtask && ["running", "waiting"].includes(subtask.status)) {
         subtask.status = subtask.attempts < this.maxRetries ? "pending" : "failed";
         subtask.error = reason;
         subtask.waitReason = "tab_unavailable";
@@ -917,47 +743,27 @@ export class AutonomousOrchestrator {
       const current = this.memory.snapshot();
       const subtask = current.subtasks.find((candidate) => candidate.id === subtaskId);
       if (!subtask) return;
-      const assignedTab = subtask.tabId
-        ? current.tabs.find((candidate) => candidate.tabId === subtask.tabId && candidate.status !== "closed")
-        : undefined;
-      const useActive = !assignedTab && !subtask.startUrl && activeTabId !== undefined && !this.claimedTabIds.has(activeTabId) && !current.tabs.some((tab) => tab.tabId === activeTabId);
+      const useActive = activeTabId !== undefined && !this.claimedTabIds.has(activeTabId) && !current.tabs.some((tab) => tab.tabId === activeTabId);
       if (useActive) this.claimedTabIds.add(activeTabId);
       const existing = useActive ? await this.dependencies.browser.getTab(activeTabId).catch(() => undefined) : undefined;
-      const reusedAssignedTab = assignedTab ? await this.dependencies.browser.getTab(assignedTab.tabId).catch(() => undefined) : undefined;
-      const tab = reusedAssignedTab || existing || await this.dependencies.browser.createTab({ url: subtask.startUrl || "about:blank", active: false });
+      const tab = existing || await this.dependencies.browser.createTab({ url: subtask.startUrl || "about:blank", active: false });
       tabId = tab.id;
       await this.memory.commit(workerId, "worker-started", `${subtask.title} started in tab ${tabId}.`, (state) => {
         const tracked = state.subtasks.find((candidate) => candidate.id === subtaskId);
         if (tracked) {
-          tracked.status = reusedAssignedTab || existing ? "inspecting" : "opening_tab";
+          tracked.status = "running";
           tracked.workerId = workerId;
           tracked.tabId = tabId;
           tracked.attempts += 1;
           tracked.startedAt = this.now();
           tracked.waitReason = undefined;
         }
-        const existingContext = state.tabs.find((candidate) => candidate.tabId === tabId);
-        if (existingContext) {
-          existingContext.workerId = workerId;
-          existingContext.subtaskId = subtaskId;
-          existingContext.status = "active";
-          existingContext.url = tab.url;
-          existingContext.title = tab.title;
-          existingContext.lastUpdatedAt = this.now();
-        } else {
-          state.tabs.push({
-            tabId: tabId!, workerId, subtaskId, createdByAgent: !existing && !reusedAssignedTab,
-            status: "active", url: tab.url, title: tab.title, lastUpdatedAt: this.now(),
-          });
-        }
-      });
-      if (subtask.startUrl && canonicalWebUrl(tab.url) !== canonicalWebUrl(subtask.startUrl)) {
-        await this.memory.commit(workerId, "worker-navigating", `${subtask.title} navigating to its assigned destination.`, (state) => {
-          const tracked = state.subtasks.find((candidate) => candidate.id === subtaskId);
-          if (tracked) { tracked.status = "navigating"; tracked.currentAction = `navigate:${subtask.startUrl}`; }
+        state.tabs.push({
+          tabId: tabId!, workerId, subtaskId, createdByAgent: !existing,
+          status: "active", url: tab.url, title: tab.title, lastUpdatedAt: this.now(),
         });
-        await this.dependencies.browser.updateTab(tabId, { url: subtask.startUrl });
-      }
+      });
+      if (subtask.startUrl && !existing) await this.dependencies.browser.updateTab(tabId, { url: subtask.startUrl });
       await this.runWorker(subtaskId, workerId, tabId);
     } catch (error) {
       await this.failWorker(subtaskId, error instanceof Error ? error.message : "Worker failed.", true);
@@ -976,11 +782,9 @@ export class AutonomousOrchestrator {
       const subtask = state.subtasks.find((candidate) => candidate.id === subtaskId);
       if (!subtask || subtask.status === "cancelled") return;
       try {
-        await this.memory.commit(workerId, "worker-inspecting", `${subtask.title} is inspecting its current page.`, (next) => {
-          const current = next.subtasks.find((candidate) => candidate.id === subtaskId);
-          if (current) { current.status = "inspecting"; current.currentAction = "observe"; }
-        });
-        snapshot = await this.observeTab(tabId);
+        const response = await this.dependencies.browser.sendMessage<{ ok?: boolean; snapshot?: PageSnapshot; error?: string }>(tabId, { type: "BV_GET_SNAPSHOT" });
+        if (!response?.ok || !response.snapshot) throw new Error(response?.error || "Could not observe the worker tab.");
+        snapshot = response.snapshot;
         await this.memory.commit(workerId, "observation-added", `${subtask.title} observed ${snapshot.title || snapshot.url}.`, (next) => {
           const tab = next.tabs.find((candidate) => candidate.tabId === tabId);
           if (tab) {
@@ -996,18 +800,6 @@ export class AutonomousOrchestrator {
           });
         });
 
-        const latestSubtask = this.memory.snapshot().subtasks.find((candidate) => candidate.id === subtaskId);
-        if (latestSubtask?.searchQuery && !latestSubtask.searchExecuted) {
-          const structuredSearch = await this.executeStructuredSearch(latestSubtask, workerId, tabId, snapshot);
-          if (structuredSearch?.verified) {
-            snapshot = structuredSearch.snapshot;
-            if (isSimpleSearchWorkflow(latestSubtask)) {
-              await this.completeWorker(subtaskId, workerId, `Verified search for “${latestSubtask.searchQuery}” on ${snapshot.url}.`, snapshot.url, "Search results page or state was observed after submission.");
-              return;
-            }
-          }
-        }
-
         const plannerRequest = {
           userRequest: subtask.instruction,
           snapshot,
@@ -1015,7 +807,7 @@ export class AutonomousOrchestrator {
           conversation: state.conversation.slice(-8).map(({ role, content }) => ({ role, content })),
           sharedMemoryContext: formatSharedMemoryForWorker(this.memory.snapshot(), workerId),
         };
-        let action = protectPlannerAction(plannerRequest, await this.llmScheduler.schedule(() => planner.plan(plannerRequest)));
+        let action = protectPlannerAction(plannerRequest, await planner.plan(plannerRequest));
         const safety = inspectActionSafety(action, snapshot);
         if (!safety.permitted) {
           await this.failWorker(subtaskId, safety.reason || "Safety policy blocked the worker action.", false);
@@ -1116,93 +908,6 @@ export class AutonomousOrchestrator {
     await this.failWorker(subtaskId, `Worker reached the ${this.maxStepsPerWorker}-step limit.`, false);
   }
 
-  private async observeTab(tabId: number): Promise<PageSnapshot> {
-    let lastError = "Could not observe the worker tab.";
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      try {
-        const response = await this.dependencies.browser.sendMessage<{ ok?: boolean; snapshot?: PageSnapshot; error?: string }>(tabId, { type: "BV_GET_SNAPSHOT" });
-        if (response?.ok && response.snapshot) {
-          const snapshot = response.snapshot;
-          if (attempt === 3 || snapshot.interactiveElements.length > 0 || !/^about:blank$|^chrome:\/\//i.test(snapshot.url)) return snapshot;
-        } else {
-          lastError = response?.error || lastError;
-        }
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : lastError;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 350));
-    }
-    throw new Error(lastError);
-  }
-
-  private async executeStructuredSearch(
-    subtask: OrchestratedSubtask,
-    workerId: string,
-    tabId: number,
-    before: PageSnapshot,
-  ): Promise<{ snapshot: PageSnapshot; verified: boolean } | undefined> {
-    const query = subtask.searchQuery?.trim();
-    if (!query) return undefined;
-    const searchInput = findSearchInput(before);
-    if (!searchInput) return undefined;
-
-    const typeAction: PlannerAction = { action: "type", id: searchInput.id, text: query, rationale: "Entering the requested search query." };
-    const safety = inspectActionSafety(typeAction, before);
-    if (!safety.permitted) throw new Error(safety.reason || "Search input was blocked by safety policy.");
-    await this.memory.commit(workerId, "search-executing", `${subtask.title} is entering the requested search query.`, (next) => {
-      const current = next.subtasks.find((candidate) => candidate.id === subtask.id);
-      if (current) { current.status = "executing"; current.currentAction = "type-search-query"; }
-    });
-    const typed = await this.dependencies.browser.sendMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(tabId, { type: "BV_EXECUTE_ACTION", action: typeAction });
-    if (!typed?.ok) throw new Error(typed?.error || "Could not enter the search query.");
-    let afterType = typed.freshSnapshot || await this.observeTab(tabId);
-    const currentSearchInput = findSearchInput(afterType) || searchInput;
-    const submit = findSearchSubmit(afterType);
-    const submitAction: PlannerAction = submit
-      ? { action: "click", id: submit.id, rationale: "Submitting the requested search." }
-      : { action: "press_key", id: currentSearchInput.id, key: "Enter", rationale: "Submitting the requested search." };
-    const submitSafety = inspectActionSafety(submitAction, afterType);
-    if (!submitSafety.permitted) throw new Error(submitSafety.reason || "Search submission was blocked by safety policy.");
-    const submitted = await this.dependencies.browser.sendMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(tabId, { type: "BV_EXECUTE_ACTION", action: submitAction });
-    if (!submitted?.ok) throw new Error(submitted?.error || "Could not submit the search query.");
-    let afterSubmit = submitted.freshSnapshot || await this.observeTab(tabId);
-    const normalizedQuery = query.toLowerCase();
-    const hasVerifiedSearchState = (candidate: PageSnapshot) => {
-      const inputStillContainsQuery = candidate.interactiveElements.some((element) =>
-        [searchInput.id, currentSearchInput.id].includes(element.id) && (element.value || "").toLowerCase().includes(normalizedQuery)
-      );
-      const pageContainsQuery = `${candidate.url} ${candidate.title} ${candidate.summary}`.toLowerCase().includes(normalizedQuery);
-      const pageChanged = candidate.url !== before.url || candidate.title !== before.title || candidate.summary !== before.summary;
-      return pageChanged && (inputStillContainsQuery || pageContainsQuery);
-    };
-    for (let attempt = 0; attempt < 3 && !hasVerifiedSearchState(afterSubmit); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      afterSubmit = await this.observeTab(tabId);
-    }
-    const verified = hasVerifiedSearchState(afterSubmit);
-    await this.memory.commit(workerId, "search-verified", verified ? `${subtask.title} verified the search results.` : `${subtask.title} could not verify the search result state.`, (next) => {
-      const current = next.subtasks.find((candidate) => candidate.id === subtask.id);
-      if (current) {
-        current.status = verified ? "verifying" : "executing";
-        current.searchExecuted = verified;
-        current.verification = verified ? "Search submission changed the observed page and retained the requested query." : "The query was entered, but the resulting page state could not be verified.";
-        current.currentAction = verified ? "search-verified" : "search-needs-planner-verification";
-      }
-    });
-    if (verified) {
-      await this.publishFinding({
-        id: `${workerId}-search-result`,
-        workerId,
-        subtaskId: subtask.id,
-        tabId,
-        title: `${subtask.title} search result`,
-        content: afterSubmit.summary.slice(0, 1200) || `Search results loaded for “${query}”.`,
-        sourceUrl: afterSubmit.url,
-      });
-    }
-    return { snapshot: afterSubmit, verified };
-  }
-
   private async executePendingConfirmation(subtask: OrchestratedSubtask): Promise<void> {
     if (!subtask.tabId || !subtask.pendingAction) return;
     try {
@@ -1223,7 +928,7 @@ export class AutonomousOrchestrator {
     }
   }
 
-  private async completeWorker(subtaskId: string, workerId: string, result: string, sourceUrl?: string, verification?: string): Promise<void> {
+  private async completeWorker(subtaskId: string, workerId: string, result: string, sourceUrl?: string): Promise<void> {
     await this.memory.commit(workerId, "worker-completed", result, (state) => {
       const subtask = state.subtasks.find((candidate) => candidate.id === subtaskId);
       if (subtask) {
@@ -1231,7 +936,6 @@ export class AutonomousOrchestrator {
         subtask.result = result;
         subtask.completedAt = this.now();
         subtask.waitReason = undefined;
-        subtask.verification = verification || subtask.verification;
       }
       state.findings.push({ id: createId("finding"), workerId, subtaskId, tabId: subtask?.tabId, title: subtask?.title || "Worker result", content: result, sourceUrl, createdAt: this.now(), version: state.version + 1 });
     });
@@ -1254,21 +958,19 @@ export class AutonomousOrchestrator {
 
   private async finishIfSettled(): Promise<void> {
     const state = this.memory.snapshot();
-    if (state.subtasks.some((subtask) => !["completed", "failed", "cancelled"].includes(subtask.status))) return;
+    if (state.subtasks.some((subtask) => subtask.status === "pending" || subtask.status === "running")) return;
     const waiting = state.subtasks.some((subtask) => subtask.status === "waiting");
     const finalStatus = waiting ? "waiting" : state.subtasks.some((subtask) => subtask.status === "failed") ? "failed" : "completed";
     await this.memory.commit("orchestrator", waiting ? "task-waiting" : "task-finished", waiting ? "Autonomous task is waiting for user input." : "All autonomous workers finished.", (next) => {
       next.status = finalStatus;
     });
     if (!waiting && !this.memory.snapshot().finalResponse) {
-      const finalState = this.memory.snapshot();
-      let response = finalState.subtasks
+      let response = this.memory.snapshot().subtasks
         .filter((subtask) => subtask.result || subtask.error)
         .map((subtask) => `${subtask.title}: ${subtask.result || subtask.error}`)
         .join("\n") || "The autonomous task finished.";
       try {
-        const allResultsVerified = finalState.subtasks.length > 0 && finalState.subtasks.every((subtask) => subtask.status !== "completed" || Boolean(subtask.verification));
-        if (this.dependencies.summarize && !allResultsVerified) response = await this.llmScheduler.schedule(() => this.dependencies.summarize!(this.memory.snapshot()));
+        if (this.dependencies.summarize) response = await this.dependencies.summarize(this.memory.snapshot());
       } catch (error) {
         await this.memory.commit("orchestrator", "summary-failed", error instanceof Error ? error.message : "Could not generate the final task summary.", (next) => {
           next.errors.push({ actor: "orchestrator", message: error instanceof Error ? error.message : "Could not generate the final task summary.", retryable: false, createdAt: this.now() });

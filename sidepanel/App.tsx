@@ -971,10 +971,49 @@ export const App: React.FC = () => {
     if (/^https?:\/\//i.test(siteName)) return siteName;
     if (/\.[a-z]{2,}(\/|$)/i.test(siteName)) return `https://${siteName}`;
 
-    // Treat a bare site name as a conventional domain. Arbitrary domains and
-    // full URLs are handled above; no website allowlist is needed here.
-    const domain = siteName.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9.-]/g, "");
-    return domain ? `https://${domain}.com` : null;
+    // Common site name → URL mapping
+    const siteMap: Record<string, string> = {
+      leetcode: "https://leetcode.com",
+      youtube: "https://youtube.com",
+      google: "https://google.com",
+      gmail: "https://mail.google.com",
+      github: "https://github.com",
+      stackoverflow: "https://stackoverflow.com",
+      "stack overflow": "https://stackoverflow.com",
+      twitter: "https://twitter.com",
+      x: "https://x.com",
+      facebook: "https://facebook.com",
+      instagram: "https://instagram.com",
+      linkedin: "https://linkedin.com",
+      amazon: "https://amazon.in",
+      flipkart: "https://flipkart.com",
+      netflix: "https://netflix.com",
+      spotify: "https://spotify.com",
+      reddit: "https://reddit.com",
+      whatsapp: "https://web.whatsapp.com",
+      maps: "https://maps.google.com",
+      "google maps": "https://maps.google.com",
+      drive: "https://drive.google.com",
+      "google drive": "https://drive.google.com",
+      docs: "https://docs.google.com",
+      sheets: "https://sheets.google.com",
+      irctc: "https://irctc.co.in",
+      paytm: "https://paytm.com",
+      swiggy: "https://swiggy.com",
+      zomato: "https://zomato.com",
+      chatgpt: "https://chatgpt.com",
+      "chat gpt": "https://chatgpt.com",
+      gemini: "https://gemini.google.com",
+      notion: "https://notion.so",
+      figma: "https://figma.com",
+      canva: "https://canva.com",
+    };
+
+    const normalized = siteName.toLowerCase().replace(/\s+/g, " ");
+    if (siteMap[normalized]) return siteMap[normalized];
+
+    // Fallback: treat as domain
+    return `https://${siteName.replace(/\s+/g, "")}.com`;
   };
 
   const selectArea = async () => {
@@ -1859,7 +1898,7 @@ export const App: React.FC = () => {
                     <span className={`worker-status ${subtask.status}`} />
                     <div className="worker-copy">
                       <strong>{subtask.title}</strong>
-                      <span>{subtask.status}{subtask.currentAction ? ` · ${subtask.currentAction}` : ""}{tab?.tabId ? ` · tab ${tab.tabId}` : ""}{subtask.error ? ` · ${subtask.error}` : ""}</span>
+                      <span>{subtask.status}{tab?.tabId ? ` · tab ${tab.tabId}` : ""}{subtask.error ? ` · ${subtask.error}` : ""}</span>
                     </div>
                     {tab?.tabId && tab.status !== "closed" && (
                       <button

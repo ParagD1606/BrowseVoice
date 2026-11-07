@@ -8,7 +8,6 @@
  *  - scroll(direction)
  *  - navigate(url)
  *  - open_tab(url, task)
- *  - press_key(id, key)
  *  - ask_user(question)
  *  - done(summary)
  */
@@ -20,7 +19,6 @@ export type ActionType =
   | "scroll"
   | "navigate"
   | "open_tab"
-  | "press_key"
   | "ask_user"
   | "done";
 
@@ -66,13 +64,6 @@ export interface OpenTabAction {
   rationale?: string;
 }
 
-export interface PressKeyAction {
-  action: "press_key";
-  id: number;
-  key: string;
-  rationale?: string;
-}
-
 export interface AskUserAction {
   action: "ask_user";
   question: string;
@@ -93,7 +84,6 @@ export type PlannerAction =
   | ScrollAction
   | NavigateAction
   | OpenTabAction
-  | PressKeyAction
   | AskUserAction
   | DoneAction;
 
@@ -167,15 +157,6 @@ export const PLANNER_JSON_SCHEMA = {
         rationale: { type: "string" },
       },
       required: ["action", "url"],
-    },
-    {
-      properties: {
-        action: { const: "press_key" },
-        id: { type: "integer", minimum: 1, description: "Numeric ID of the focused element" },
-        key: { type: "string", minLength: 1, description: "Keyboard key such as Enter or Escape" },
-        rationale: { type: "string" },
-      },
-      required: ["action", "id", "key"],
     },
     {
       properties: {
@@ -263,16 +244,6 @@ export function validatePlannerAction(input: unknown): ValidationResult {
       return { valid: true, action: { action: "open_tab", url: raw.url.trim(), task, rationale } };
     }
 
-    case "press_key": {
-      if (typeof raw.id !== "number" || !Number.isInteger(raw.id) || raw.id <= 0) {
-        return { valid: false, error: "action 'press_key' requires a positive integer 'id'." };
-      }
-      if (typeof raw.key !== "string" || !raw.key.trim()) {
-        return { valid: false, error: "action 'press_key' requires a non-empty string 'key'." };
-      }
-      return { valid: true, action: { action: "press_key", id: raw.id, key: raw.key.trim(), rationale } };
-    }
-
     case "ask_user": {
       if (typeof raw.question !== "string" || raw.question.trim().length === 0) {
         return { valid: false, error: "action 'ask_user' requires a non-empty string 'question'." };
@@ -293,7 +264,7 @@ export function validatePlannerAction(input: unknown): ValidationResult {
     default:
       return {
         valid: false,
-        error: `Unknown action '${String(action)}'. Allowed actions: click, type, select, scroll, navigate, open_tab, press_key, ask_user, done.`,
+        error: `Unknown action '${String(action)}'. Allowed actions: click, type, select, scroll, navigate, open_tab, ask_user, done.`,
       };
   }
 }

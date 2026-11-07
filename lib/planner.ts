@@ -257,7 +257,6 @@ RULES:
    - {"action": "scroll", "direction": "up"|"down"|"left"|"right", "amount": 300, "rationale": "<short rationale>"}
    - {"action": "navigate", "url": "<valid url>", "rationale": "<short rationale>"}
    - {"action": "open_tab", "url": "<valid url>", "task": "<optional task for the new tab>", "rationale": "<short rationale>"}
-   - {"action": "press_key", "id": <number>, "key": "Enter", "rationale": "<short rationale>"}
    - {"action": "ask_user", "question": "<question in user's language>", "options": ["opt1", "opt2"], "rationale": "<short rationale>"}
    - {"action": "done", "summary": "<concise summary of completed work>"}
 
@@ -310,7 +309,7 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
         temperature: 0.1,
         // Planner responses are short JSON actions. Avoid reserving the provider's
         // default completion budget against a limited per-minute token allowance.
-        max_tokens: 256,
+        max_tokens: 512,
         response_format: { type: "json_object" },
       }),
     });
@@ -362,14 +361,10 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
         model: this.model,
         messages: correctionMessages,
         temperature: 0.0,
-        max_tokens: 256,
+        max_tokens: 512,
         response_format: { type: "json_object" },
       }),
     });
-
-    if (!response.ok) {
-      throw new Error(`LLM API returned ${response.status}: ${await response.text()}`);
-    }
 
     const data = await response.json();
     const content = data?.choices?.[0]?.message?.content || "";
@@ -390,8 +385,8 @@ export function buildPlannerPrompt(
   request: PlannerRequest,
   limits: { maxElements?: number; maxSummaryLength?: number } = {},
 ): string {
-  const maxElements = limits.maxElements ?? 16;
-  const maxSummaryLength = limits.maxSummaryLength ?? 160;
+  const maxElements = limits.maxElements ?? 24;
+  const maxSummaryLength = limits.maxSummaryLength ?? 240;
   const identifierHints = extractExactValueCandidates(request.userRequest).map((candidate) => ({
     value: candidate.value,
     kind: candidate.kind,
@@ -437,7 +432,7 @@ export function buildPlannerPrompt(
         role: turn.role,
         content: turn.content.slice(0, 180),
       })),
-    sharedMemory: request.sharedMemoryContext?.slice(0, 6000),
+    sharedMemory: request.sharedMemoryContext?.slice(0, 14000),
     pendingConfirmation: Boolean(request.pendingConfirmation),
     page: {
       url: request.snapshot.url.slice(0, 300),
@@ -486,7 +481,6 @@ export class GeminiPlanner implements PlannerProvider {
       ],
       generationConfig: {
         responseMimeType: "application/json",
-        maxOutputTokens: 256,
       },
     };
 
@@ -528,13 +522,9 @@ export class GeminiPlanner implements PlannerProvider {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: PLANNER_SYSTEM_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: correctionText }] }],
-        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 256 },
+        generationConfig: { responseMimeType: "application/json" },
       }),
     });
-
-    if (!response.ok) {
-      throw new Error(`Gemini API returned ${response.status}: ${await response.text()}`);
-    }
 
     const data = await response.json();
     const content = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
