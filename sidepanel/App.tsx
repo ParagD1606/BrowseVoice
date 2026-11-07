@@ -569,12 +569,6 @@ export const App: React.FC = () => {
     conversationRef.current = [];
     awaitingUserReplyRef.current = false;
     formFillRef.current = null;
-    // The standard single-tab agent also activates the page badge, outside the
-    // autonomous orchestrator's managed-tab registry. Deactivate this tab
-    // directly so Stop clears the indicator in either execution mode.
-    if (activeTabIdRef.current !== null) {
-      void chrome.tabs.sendMessage(activeTabIdRef.current, { type: "BV_DEACTIVATE_AGENT" }).catch(() => {});
-    }
     void orchestratorRef.current?.stop(false).catch((error) => {
       console.warn("Could not fully stop the autonomous agent", error);
     });
