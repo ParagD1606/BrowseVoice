@@ -10,7 +10,6 @@
 import { capturePageSnapshot } from "./observer";
 import { executeAction } from "./executor";
 import type { PlannerAction } from "../lib/schema";
-import { cleanSnippetLines, cleanSnippetText } from "../lib/snips";
 
 let indicatorElement: HTMLElement | null = null;
 let agentActive = false;
@@ -25,44 +24,31 @@ interface SnipSelectionResult {
 }
 
 function getSnipText(rect: SnipSelectionResult["rect"]): { text: string; elements: string[] } {
-  const positioned: Array<{ top: number; left: number; order: number; text: string }> = [];
-  const selectedInteractive = new Set<HTMLElement>();
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  let node: Node | null = walker.nextNode();
-  let order = 0;
+  const selected: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+  const candidates = Array.from(document.querySelectorAll<HTMLElement>("body *"));
 
-  while (node) {
-    const textNode = node;
-    const parent = textNode.parentElement;
-    if (parent && !parent.closest("#browse-voice-snipper")) {
-      const style = getComputedStyle(parent);
-      if (style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0") {
-        const range = document.createRange();
-        range.selectNodeContents(textNode);
-        const matchingRect = Array.from(range.getClientRects()).find((box) =>
-          box.width > 0 && box.height > 0 &&
-          box.right > rect.x && box.left < rect.x + rect.width &&
-          box.bottom > rect.y && box.top < rect.y + rect.height
-        );
-        if (matchingRect) {
-          const text = cleanSnippetText(textNode.textContent || "");
-          if (text) positioned.push({ top: matchingRect.top, left: matchingRect.left, order: order++, text });
-          const interactive = parent.closest<HTMLElement>("button, a, input, select, textarea, [role]");
-          if (interactive) selectedInteractive.add(interactive);
-        }
-        range.detach();
+  for (const el of candidates) {
+    if (el.closest("#browse-voice-snipper")) continue;
+    const box = el.getBoundingClientRect();
+    const intersects = box.width > 0 && box.height > 0 &&
+      box.right > rect.x && box.left < rect.x + rect.width &&
+      box.bottom > rect.y && box.top < rect.y + rect.height;
+    if (intersects && el.innerText?.trim()) {
+      const childHasText = Array.from(el.children).some((child) =>
+        (child as HTMLElement).innerText?.trim() === el.innerText?.trim()
+      );
+      if (!childHasText && !seen.has(el)) {
+        seen.add(el);
+        selected.push(el);
       }
     }
-    node = walker.nextNode();
   }
 
-  positioned.sort((a, b) => a.top - b.top || a.left - b.left || a.order - b.order);
-  const text = cleanSnippetLines(positioned.map((item) => item.text));
-  const elements = Array.from(selectedInteractive)
-    .map((el) => {
-      const label = cleanSnippetText(el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.innerText || "");
-      return label ? `${el.tagName.toLowerCase()}: ${label.slice(0, 160)}` : "";
-    })
+  const text = selected.map((el) => el.innerText.trim().replace(/\s+/g, " ")).join("\n").slice(0, 5000);
+  const elements = selected
+    .filter((el) => /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/.test(el.tagName) || el.getAttribute("role"))
+    .map((el) => `${el.tagName.toLowerCase()}: ${(el.getAttribute("aria-label") || el.innerText || el.getAttribute("placeholder") || "").trim().replace(/\s+/g, " ").slice(0, 160)}`)
     .filter(Boolean)
     .slice(0, 40);
 

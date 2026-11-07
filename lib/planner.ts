@@ -19,7 +19,6 @@ import {
   preserveExactPlannerValue,
   resolveFormValue,
 } from "./form-values.ts";
-import { cleanSnippetLines, cleanSnippetText } from "./snips.ts";
 
 export interface StepLogEntry {
   stepNumber: number;
@@ -145,8 +144,8 @@ function buildSnipContextText(question: string, snips: SnipContext[]): string {
     snippet: index + 1,
     pageTitle: snip.title,
     pageUrl: snip.url,
-    extractedText: cleanSnippetText(snip.text),
-    visibleElements: snip.elements.map((element) => cleanSnippetText(element)).filter(Boolean),
+    extractedText: snip.text,
+    visibleElements: snip.elements,
   }));
   return `Question: ${question}\n\nSelected browser snippets:\n${JSON.stringify(context, null, 2)}`;
 }
@@ -222,7 +221,7 @@ export async function answerAboutSnips(config: LLMConfig, question: string, snip
           const fallbackText = fallbackData?.choices?.[0]?.message?.content?.trim();
           if (fallbackText) return { text: fallbackText, provider: `Text context (${config.model || "OpenAI-compatible"})` };
         }
-        const extracted = snips.map((snip) => cleanSnippetText(snip.text)).filter(Boolean).join(" ");
+        const extracted = snips.map((snip) => snip.text).filter(Boolean).join(" ");
         return {
           text: extracted ? `This model cannot read the image, but I found: ${extracted.slice(0, 700)}` : "This model does not support image questions. Choose Gemini or a vision-capable model in Settings.",
           provider: "Text context fallback",
@@ -236,7 +235,7 @@ export async function answerAboutSnips(config: LLMConfig, question: string, snip
     return { text, provider: `Vision (${config.model || "gpt-4o-mini"})` };
   }
 
-  const extracted = snips.map((snip) => cleanSnippetLines([snip.text])).filter(Boolean).join(" ");
+  const extracted = snips.map((snip) => snip.text).filter(Boolean).join(" ");
   return {
     text: extracted ? `I found this in the selected area: ${extracted.slice(0, 700)}` : "I have the selected area, but the offline planner cannot read its visual details. Add a Gemini or vision-capable model in Settings.",
     provider: "Offline preview",
