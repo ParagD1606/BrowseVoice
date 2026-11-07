@@ -20,6 +20,13 @@ export type ActionType =
   | "ask_user"
   | "done";
 
+export interface SubTask {
+  id: string;
+  label: string;
+  startUrl?: string;
+  goal: string;
+}
+
 export type ScrollDirection = "up" | "down" | "left" | "right";
 
 export interface ClickAction {
@@ -88,6 +95,81 @@ export interface ValidationFailure {
 }
 
 export type ValidationResult = ValidationSuccess | ValidationFailure;
+
+export interface SubTaskValidationSuccess {
+  valid: true;
+  tasks: SubTask[];
+}
+
+export interface SubTaskValidationFailure {
+  valid: false;
+  error: string;
+}
+
+export type SubTaskValidationResult = SubTaskValidationSuccess | SubTaskValidationFailure;
+
+export const SUBTASK_JSON_SCHEMA = {
+  $schema: "http://json-schema.org/draft-07/schema#",
+  title: "BrowseVoiceSubTasks",
+  type: "array",
+  minItems: 1,
+  maxItems: 4,
+  items: {
+    type: "object",
+    additionalProperties: false,
+    required: ["id", "label", "goal"],
+    properties: {
+      id: { type: "string", minLength: 1 },
+      label: { type: "string", minLength: 1 },
+      startUrl: { type: "string", format: "uri", pattern: "^https?://" },
+      goal: { type: "string", minLength: 1 },
+    },
+  },
+} as const;
+
+function isAllowedHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedNavigationUrl(value: string): boolean {
+  return isAllowedHttpUrl(value.trim());
+}
+
+export function validateSubTasks(input: unknown): SubTaskValidationResult {
+  if (!Array.isArray(input)) return { valid: false, error: "Decomposition output must be a JSON array." };
+  if (input.length < 1 || input.length > 4) return { valid: false, error: "Return between 1 and 4 independent sub-tasks." };
+
+  const ids = new Set<string>();
+  const tasks: SubTask[] = [];
+  for (const [index, value] of input.entries()) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { valid: false, error: `Sub-task ${index + 1} must be an object.` };
+    }
+    const raw = value as Record<string, unknown>;
+    const unknownKeys = Object.keys(raw).filter((key) => !["id", "label", "startUrl", "goal"].includes(key));
+    if (unknownKeys.length) return { valid: false, error: `Sub-task ${index + 1} contains unsupported fields: ${unknownKeys.join(", ")}.` };
+    if (typeof raw.id !== "string" || !raw.id.trim()) return { valid: false, error: `Sub-task ${index + 1} requires a non-empty string 'id'.` };
+    if (ids.has(raw.id.trim())) return { valid: false, error: `Sub-task id '${raw.id.trim()}' is duplicated.` };
+    if (typeof raw.label !== "string" || !raw.label.trim()) return { valid: false, error: `Sub-task ${index + 1} requires a non-empty string 'label'.` };
+    if (typeof raw.goal !== "string" || !raw.goal.trim()) return { valid: false, error: `Sub-task ${index + 1} requires a non-empty string 'goal'.` };
+    if (raw.startUrl !== undefined && (typeof raw.startUrl !== "string" || !isAllowedHttpUrl(raw.startUrl))) {
+      return { valid: false, error: `Sub-task ${index + 1} has an invalid startUrl; only http(s) URLs are allowed.` };
+    }
+    ids.add(raw.id.trim());
+    tasks.push({
+      id: raw.id.trim(),
+      label: raw.label.trim().slice(0, 120),
+      ...(raw.startUrl ? { startUrl: raw.startUrl.trim() } : {}),
+      goal: raw.goal.trim().slice(0, 600),
+    });
+  }
+  return { valid: true, tasks };
+}
 
 /** JSON Schema specification for the planner LLM system instructions */
 export const PLANNER_JSON_SCHEMA = {
@@ -214,6 +296,9 @@ export function validatePlannerAction(input: unknown): ValidationResult {
       if (typeof raw.url !== "string" || raw.url.trim().length === 0) {
         return { valid: false, error: "action 'navigate' requires a non-empty string 'url'." };
       }
+      if (!isAllowedNavigationUrl(raw.url)) {
+        return { valid: false, error: "action 'navigate' only allows http(s) URLs." };
+      }
       return { valid: true, action: { action: "navigate", url: raw.url.trim(), rationale } };
     }
 
@@ -266,5 +351,27 @@ export function parseAndValidatePlannerJson(rawText: string): ValidationResult {
       }
     }
     return { valid: false, error: "LLM response did not contain a valid JSON object." };
+  }
+}
+
+/** Parses strict decomposition JSON, accepting only a 1–4 item array. */
+export function parseAndValidateSubTasksJson(rawText: string): SubTaskValidationResult {
+  let clean = rawText.trim();
+  if (clean.startsWith("```")) {
+    clean = clean.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  }
+  try {
+    return validateSubTasks(JSON.parse(clean));
+  } catch {
+    const start = clean.indexOf("[");
+    const end = clean.lastIndexOf("]");
+    if (start !== -1 && end > start) {
+      try {
+        return validateSubTasks(JSON.parse(clean.slice(start, end + 1)));
+      } catch (innerErr) {
+        return { valid: false, error: `JSON parse error: ${innerErr instanceof Error ? innerErr.message : "Malformed JSON"}` };
+      }
+    }
+    return { valid: false, error: "LLM response did not contain a valid sub-task JSON array." };
   }
 }

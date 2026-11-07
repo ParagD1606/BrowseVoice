@@ -12,7 +12,7 @@
  */
 
 import { getElementById } from "./observer";
-import type { PlannerAction } from "../lib/schema";
+import { isAllowedNavigationUrl, type PlannerAction } from "../lib/schema";
 import { detectSensitiveField } from "../lib/safety";
 
 export interface ExecutionResult {
@@ -50,8 +50,6 @@ export async function waitForPageSettle(timeoutMs: number = 2000): Promise<{ set
   let lastMutationAt = performance.now();
 
   return new Promise((resolve) => {
-    let timer: ReturnType<typeof setTimeout>;
-
     const observer = new MutationObserver(() => {
       lastMutationAt = performance.now();
     });
@@ -83,10 +81,10 @@ export async function waitForPageSettle(timeoutMs: number = 2000): Promise<{ set
         return;
       }
 
-      timer = setTimeout(check, 100);
+      setTimeout(check, 100);
     };
 
-    timer = setTimeout(check, 250);
+    setTimeout(check, 250);
   });
 }
 
@@ -244,6 +242,15 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
       }
 
       case "navigate": {
+        if (!isAllowedNavigationUrl(action.url)) {
+          return {
+            success: false,
+            action,
+            error: "Safety Violation Blocked: navigation only allows http(s) URLs.",
+            settled: true,
+            waitedMs: 0,
+          };
+        }
         window.location.href = action.url;
         return {
           success: true,

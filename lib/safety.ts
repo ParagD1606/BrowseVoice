@@ -14,7 +14,7 @@
  * 5. SECURE STORAGE: API keys live in chrome.storage.local. Never hardcode keys.
  */
 
-import type { PlannerAction } from "./schema.ts";
+import { isAllowedNavigationUrl, type PlannerAction } from "./schema.ts";
 
 export interface InteractiveElement {
   id: number;
@@ -150,6 +150,15 @@ export function inspectActionSafety(
   safetyAlertSpeech?: string;
 } {
   // Check action targeting an element
+  if (action.action === "navigate" && !isAllowedNavigationUrl(action.url)) {
+    return {
+      permitted: false,
+      requiresConfirmation: false,
+      reason: "Safety Block: Navigation is limited to http(s) URLs.",
+      safetyAlertSpeech: "I can only open secure or normal web addresses starting with HTTP or HTTPS.",
+    };
+  }
+
   if (action.action === "type" || action.action === "click" || action.action === "select") {
     const target = snapshot.interactiveElements.find((el) => el.id === action.id);
 

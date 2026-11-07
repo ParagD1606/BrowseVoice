@@ -474,6 +474,32 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .form-help { color: var(--subtle); font-size: 10px; line-height: 1.45; }
 .form-help a { color: var(--blue); }
 .settings-divider { height: 1px; margin: 2px 0; background: var(--line); }
+.settings-check-row { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.settings-check-row input { accent-color: var(--blue-strong); }
+.task-list-section { display: flex; flex-direction: column; gap: 9px; }
+.task-card-list { display: flex; flex-direction: column; gap: 8px; }
+.task-card { padding: 10px 11px; border: 1px solid var(--line); border-radius: 12px; background: #151d2b; }
+.task-card.running { border-color: rgba(114,170,255,.35); }
+.task-card.waiting_confirmation { border-color: rgba(240,189,114,.55); }
+.task-card.blocked, .task-card.failed { border-color: rgba(255,135,148,.4); }
+.task-card.done { border-color: rgba(82,209,164,.35); }
+.task-card-header, .task-card-identity, .task-status-row { display: flex; align-items: center; }
+.task-card-header { justify-content: space-between; gap: 8px; }
+.task-card-identity { min-width: 0; gap: 8px; }
+.task-card-identity > div { min-width: 0; display: flex; flex-direction: column; text-align: left; }
+.task-card-identity strong { overflow: hidden; color: var(--ink); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.task-card-identity span:not(.task-favicon-placeholder) { overflow: hidden; color: var(--subtle); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.task-favicon, .task-favicon-placeholder { width: 20px; height: 20px; flex: none; border-radius: 5px; }
+.task-favicon-placeholder { display: grid; place-items: center; color: var(--blue); border: 1px solid var(--line); background: var(--raised); font-size: 12px; }
+.task-stop-button { padding: 4px 7px; color: var(--red); border: 1px solid rgba(255,135,148,.25); border-radius: 999px; background: rgba(153,47,66,.18); font-size: 9px; }
+.task-stop-button:disabled { opacity: .4; cursor: default; }
+.task-status-row { gap: 5px; margin-top: 8px; color: var(--muted); font-size: 9px; text-transform: capitalize; }
+.task-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--subtle); }
+.task-status-dot.running { background: var(--blue); }
+.task-status-dot.waiting_confirmation { background: var(--amber); }
+.task-status-dot.blocked, .task-status-dot.failed { background: var(--red); }
+.task-status-dot.done { background: var(--green); }
+.task-current-step { margin-top: 4px; overflow: hidden; color: #c1ccd9; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
 /* Command-center visual pass inspired by the supplied reference. */

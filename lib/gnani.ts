@@ -107,7 +107,6 @@ export async function setupGnaniDeclarativeHeaders(apiKey: string, languageCode:
  */
 export class GnaniPrismaWebSocketClient {
   private ws: WebSocket | null = null;
-  private isConnected = false;
   private onTranscriptCallback: (text: string, isFinal: boolean) => void;
   private onErrorCallback: (error: Error) => void;
   private config: GnaniConfig;
@@ -143,7 +142,6 @@ export class GnaniPrismaWebSocketClient {
         this.ws.binaryType = "arraybuffer";
 
         this.ws.onopen = () => {
-          this.isConnected = true;
           resolve();
         };
 
@@ -166,14 +164,13 @@ export class GnaniPrismaWebSocketClient {
           }
         };
 
-        this.ws.onerror = (evt) => {
+        this.ws.onerror = () => {
           const err = new Error("Gnani Prisma WebSocket error occurred.");
           this.onErrorCallback(err);
           reject(err);
         };
 
         this.ws.onclose = () => {
-          this.isConnected = false;
         };
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)));
@@ -186,7 +183,7 @@ export class GnaniPrismaWebSocketClient {
    */
   public sendAudioChunk(pcmData: Int16Array | ArrayBuffer): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(pcmData);
+      this.ws.send(pcmData as unknown as ArrayBuffer);
     }
   }
 
@@ -201,7 +198,6 @@ export class GnaniPrismaWebSocketClient {
         // Ignore close error
       }
       this.ws = null;
-      this.isConnected = false;
     }
   }
 }
