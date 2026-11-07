@@ -191,49 +191,6 @@ function matchOption(options: string[], answer: string): string | undefined {
   return options.find((option) => option.toLowerCase() === normalized || option.toLowerCase().includes(normalized));
 }
 
-/** Ask for a concrete value, using the field's accessible metadata when available. */
-function buildFormFieldQuestion(field: FormFieldDescriptor): string {
-  const label = field.label.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-  const normalized = `${label} ${field.name || ""} ${field.type || ""}`.toLowerCase();
-
-  if (field.kind === "checkbox") {
-    return `क्या मैं “${label}” चुनूँ? कृपया हाँ या नहीं में जवाब दें।`;
-  }
-  if (field.kind === "select" || field.kind === "radio") {
-    const options = field.options?.filter(Boolean) || [];
-    return `“${label}” के लिए इनमें से कौन-सा विकल्प चुनूँ? ${options.join(", ")}। विकल्प का नाम या उसका क्रमांक बताइए।`;
-  }
-
-  if (/\b(first.?name|given.?name)\b/.test(normalized)) {
-    return "आपका पहला नाम क्या है? हिंदी में बता सकते हैं; मैं इसे अंग्रेज़ी अक्षरों में लिखूँगा।";
-  }
-  if (/\b(last.?name|surname|family.?name)\b/.test(normalized)) {
-    return "आपका उपनाम या परिवार का नाम क्या है? हिंदी में बताइए; मैं इसे अंग्रेज़ी अक्षरों में लिखूँगा।";
-  }
-  if (/\b(full.?name|name)\b/.test(normalized)) {
-    return `“${label}” के लिए पूरा नाम क्या लिखूँ? हिंदी में बता सकते हैं; मैं नाम को अंग्रेज़ी अक्षरों में लिखूँगा।`;
-  }
-  if (/\b(email|e-mail)\b/.test(normalized) || field.type === "email") {
-    return `“${label}” के लिए कौन-सा ईमेल पता भरूँ? कृपया इसे चैट में अंग्रेज़ी अक्षरों में टाइप करें, जैसे name@example.com, ताकि पता सही रहे।`;
-  }
-  if (/\b(phone|mobile|telephone|contact)\b/.test(normalized) || field.type === "tel") {
-    return `“${label}” के लिए कौन-सा फ़ोन नंबर भरूँ? नंबर टाइप करें; देश का कोड तभी जोड़ें जब फ़ॉर्म माँगे।`;
-  }
-  if (/\b(address|street|city|state|province|district|country|postal|zip|pin.?code)\b/.test(normalized)) {
-    return `“${label}” के लिए पूरा पता या स्थान क्या भरूँ? हिंदी में बता सकते हैं; मैं इसे अंग्रेज़ी में लिखूँगा। अगर यह पिन कोड का फ़ील्ड है, तो कृपया अंक बताएं।`;
-  }
-  if (/\b(date|dob|birth)\b/.test(normalized) || field.type === "date") {
-    return `“${label}” के लिए कौन-सी तारीख भरूँ? कृपया YYYY-MM-DD फ़ॉर्मैट में बताएं, जैसे 2000-11-05।`;
-  }
-  if (field.type === "number") {
-    return `“${label}” के लिए कौन-सी संख्या भरूँ? अंक बताएं और इकाई केवल तभी जोड़ें जब फ़ॉर्म माँगे।`;
-  }
-  if (field.type === "url") {
-    return `“${label}” के लिए कौन-सा वेबसाइट पता भरूँ? कृपया पूरा URL टाइप करें, जैसे https://example.com।`;
-  }
-  return `“${label}” के लिए कौन-सी जानकारी भरूँ? हिंदी में जवाब दें; मैं इसे अंग्रेज़ी में लिखूँगा।`;
-}
-
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 const HUGGINGFACE_ENDPOINT = "https://router.huggingface.co/v1";
 const DEFAULT_HUGGINGFACE_MODEL = "openai/gpt-oss-20b:deepinfra";
@@ -369,11 +326,93 @@ Object.assign(UI_TRANSLATIONS, {
   "This is a risk assessment, not proof that a site is fake or legitimate.": { "hi-IN": "यह जोखिम आकलन है; इससे साइट के नकली या वैध होने का पक्का प्रमाण नहीं मिलता।", "ta-IN": "இது ஒரு ஆபத்து மதிப்பீடு மட்டுமே; தளம் போலியானது அல்லது உண்மையானது என்பதற்கான உறுதியான ஆதாரம் அல்ல.", "te-IN": "ఇది ప్రమాద అంచనా మాత్రమే; సైట్ నకిలీ లేదా నిజమైనదని నిరూపించదు.", "kn-IN": "ಇದು ಅಪಾಯದ ಮೌಲ್ಯಮಾಪನ ಮಾತ್ರ; ಸೈಟ್ ನಕಲಿ ಅಥವಾ ನಿಜವೆಂಬುದಕ್ಕೆ ಇದು ಪುರಾವೆಯಲ್ಲ.", "mr-IN": "हे जोखीम मूल्यांकन आहे; साइट बनावट किंवा वैध असल्याचा हा पुरावा नाही.", "gu-IN": "આ જોખમનું મૂલ્યાંકન છે; સાઇટ નકલી કે વિશ્વસનીય હોવાનો આ પુરાવો નથી.", "bn-IN": "এটি একটি ঝুঁকি মূল্যায়ন; সাইটটি ভুয়া বা বৈধ—এর প্রমাণ নয়।", "pa-IN": "ਇਹ ਜੋਖਮ ਦਾ ਮੁਲਾਂਕਣ ਹੈ; ਇਹ ਸਾਈਟ ਦੇ ਨਕਲੀ ਜਾਂ ਜਾਇਜ਼ ਹੋਣ ਦਾ ਸਬੂਤ ਨਹੀਂ ਹੈ।", "ml-IN": "ഇത് ഒരു അപകടസാധ്യതാ വിലയിരുത്തൽ മാത്രമാണ്; സൈറ്റ് വ്യാജമോ യഥാർത്ഥമോ എന്നതിന് തെളിവല്ല." },
 });
 
+Object.assign(UI_TRANSLATIONS, {
+  Step: { "hi-IN": "चरण", "ta-IN": "படி", "te-IN": "దశ", "kn-IN": "ಹಂತ", "mr-IN": "टप्पा", "gu-IN": "પગલું", "bn-IN": "ধাপ", "pa-IN": "ਕਦਮ", "ml-IN": "ഘട്ടം" },
+  Field: { "hi-IN": "फ़ील्ड", "ta-IN": "புலம்", "te-IN": "ఫీల్డ్", "kn-IN": "ಕ್ಷೇತ್ರ", "mr-IN": "फील्ड", "gu-IN": "ફીલ્ડ", "bn-IN": "ঘর", "pa-IN": "ਫੀਲਡ", "ml-IN": "ഫീൽഡ്" },
+  "Reply with a value for": { "hi-IN": "इसके लिए जानकारी दें", "ta-IN": "இதற்கான மதிப்பைச் சொல்லுங்கள்", "te-IN": "దీనికి విలువ చెప్పండి", "kn-IN": "ಇದಕ್ಕೆ ಮೌಲ್ಯವನ್ನು ತಿಳಿಸಿ", "mr-IN": "यासाठी माहिती द्या", "gu-IN": "આ માટે માહિતી આપો", "bn-IN": "এর জন্য তথ্য দিন", "pa-IN": "ਇਸ ਲਈ ਜਾਣਕਾਰੀ ਦਿਓ", "ml-IN": "ഇതിന് വേണ്ട വിവരം നൽകുക" },
+  "Page changed; refreshing before retrying...": { "hi-IN": "पेज बदल गया है; दोबारा कोशिश से पहले नया पेज देख रहे हैं...", "ta-IN": "பக்கம் மாறியுள்ளது; மீண்டும் முயற்சிக்கும் முன் புதுப்பிக்கிறோம்...", "te-IN": "పేజీ మారింది; మళ్లీ ప్రయత్నించే ముందు తాజా పేజీని చూస్తున్నాం...", "kn-IN": "ಪುಟ ಬದಲಾಗಿದೆ; ಮತ್ತೆ ಪ್ರಯತ್ನಿಸುವ ಮೊದಲು ನವೀಕರಿಸುತ್ತಿದ್ದೇವೆ...", "mr-IN": "पृष्ठ बदलले; पुन्हा प्रयत्न करण्यापूर्वी अद्ययावत करत आहोत...", "gu-IN": "પેજ બદલાયું છે; ફરી પ્રયાસ કરતાં પહેલાં નવું પેજ જોઈ રહ્યા છીએ...", "bn-IN": "পৃষ্ঠা বদলেছে; আবার চেষ্টা করার আগে নতুন পৃষ্ঠা দেখছি...", "pa-IN": "ਪੰਨਾ ਬਦਲ ਗਿਆ; ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਤੋਂ ਪਹਿਲਾਂ ਤਾਜ਼ਾ ਕਰ ਰਹੇ ਹਾਂ...", "ml-IN": "പേജ് മാറി; വീണ്ടും ശ്രമിക്കുന്നതിന് മുമ്പ് പുതുക്കുന്നു..." },
+});
+
 function isSelectionCommand(text: string): boolean {
   const value = text.toLowerCase().trim();
   return /(?:select|snip|capture|screenshot|crop|highlight).*(?:area|this|that|section|part|region)?|(?:yeh|yah|is|this)\s+(?:select|snip|capture|screenshot)|area\s+(?:select|snip)|select\s+karo/.test(value);
 }
 
+
+const ACTION_SPEECH: Record<string, { filled: string; selected: string; clicked: string; scrolled: string; opened: string }> = {
+  "en-IN": { filled: "Filled the %s field.", selected: "Updated the %s selection.", clicked: "Clicked %s.", scrolled: "Scrolled %s.", opened: "Opened the requested page." },
+  "hi-IN": { filled: "%s फ़ील्ड भर दिया।", selected: "%s का विकल्प चुन लिया।", clicked: "%s पर क्लिक किया।", scrolled: "%s स्क्रॉल किया।", opened: "मांगा गया पेज खोल दिया।" },
+  "ta-IN": { filled: "%s புலத்தை நிரப்பினேன்.", selected: "%s தேர்வை மாற்றினேன்.", clicked: "%s என்பதை அழுத்தினேன்.", scrolled: "%s உருட்டினேன்.", opened: "கோரிய பக்கத்தைத் திறந்தேன்." },
+  "te-IN": { filled: "%s ఫీల్డ్‌ను నింపాను.", selected: "%s ఎంపికను మార్చాను.", clicked: "%s పై క్లిక్ చేశాను.", scrolled: "%s స్క్రోల్ చేశాను.", opened: "కోరిన పేజీని తెరిచాను." },
+  "kn-IN": { filled: "%s ಕ್ಷೇತ್ರವನ್ನು ಭರ್ತಿ ಮಾಡಿದೆ.", selected: "%s ಆಯ್ಕೆಯನ್ನು ಬದಲಿಸಿದೆ.", clicked: "%s ಕ್ಲಿಕ್ ಮಾಡಿದೆ.", scrolled: "%s ಸ್ಕ್ರಾಲ್ ಮಾಡಿದೆ.", opened: "ಕೋರಿದ ಪುಟವನ್ನು ತೆರೆದಿದ್ದೇನೆ." },
+  "mr-IN": { filled: "%s फील्ड भरले.", selected: "%s पर्याय निवडला.", clicked: "%s वर क्लिक केले.", scrolled: "%s स्क्रोल केले.", opened: "मागितलेले पृष्ठ उघडले." },
+  "gu-IN": { filled: "%s ફીલ્ડ ભરી દીધું.", selected: "%s વિકલ્પ બદલ્યો.", clicked: "%s પર ક્લિક કર્યું.", scrolled: "%s સ્ક્રોલ કર્યું.", opened: "માગેલું પેજ ખોલ્યું." },
+  "bn-IN": { filled: "%s ঘরটি পূরণ করেছি।", selected: "%s বিকল্পটি বদলেছি।", clicked: "%s-এ ক্লিক করেছি।", scrolled: "%s স্ক্রল করেছি।", opened: "অনুরোধ করা পৃষ্ঠাটি খুলেছি।" },
+  "pa-IN": { filled: "%s ਫੀਲਡ ਭਰ ਦਿੱਤਾ।", selected: "%s ਵਿਕਲਪ ਬਦਲਿਆ।", clicked: "%s 'ਤੇ ਕਲਿੱਕ ਕੀਤਾ।", scrolled: "%s ਸਕ੍ਰੋਲ ਕੀਤਾ।", opened: "ਮੰਗਿਆ ਪੰਨਾ ਖੋਲ੍ਹ ਦਿੱਤਾ।" },
+  "ml-IN": { filled: "%s ഫീൽഡ് പൂരിപ്പിച്ചു.", selected: "%s തിരഞ്ഞെടുപ്പ് മാറ്റി.", clicked: "%s ക്ലിക്ക് ചെയ്തു.", scrolled: "%s സ്ക്രോൾ ചെയ്തു.", opened: "ആവശ്യപ്പെട്ട പേജ് തുറന്നു." },
+};
+
+function localizedActionSpeech(action: PlannerAction, snapshot: PageSnapshot, languageCode: string): string {
+  const speech = ACTION_SPEECH[languageCode] || ACTION_SPEECH["en-IN"];
+  if (action.action === "navigate") return speech.opened;
+  if (action.action === "scroll") return speech.scrolled.replace("%s", action.direction);
+  if (action.action === "click" || action.action === "type" || action.action === "select") {
+    const target = snapshot.interactiveElements.find((element) => element.id === action.id);
+    const label = target?.label?.trim() || "field";
+    if (action.action === "click") return speech.clicked.replace("%s", label);
+    if (action.action === "select") return speech.selected.replace("%s", label);
+    return speech.filled.replace("%s", label);
+  }
+  return action.action === "done" ? action.summary : action.action === "ask_user" ? action.question : "";
+}
+
+function resolveSpeechLanguage(languageCode: string, text: string): string {
+  if (languageCode !== "indic-auto") return languageCode;
+  if (/\p{Script=Tamil}/u.test(text)) return "ta-IN";
+  if (/\p{Script=Telugu}/u.test(text)) return "te-IN";
+  if (/\p{Script=Kannada}/u.test(text)) return "kn-IN";
+  if (/\p{Script=Bengali}/u.test(text)) return "bn-IN";
+  if (/\p{Script=Gurmukhi}/u.test(text)) return "pa-IN";
+  if (/\p{Script=Malayalam}/u.test(text)) return "ml-IN";
+  if (/\p{Script=Gujarati}/u.test(text)) return "gu-IN";
+  if (/\p{Script=Devanagari}/u.test(text)) return "hi-IN";
+  return "en-IN";
+}
+
+const FORM_QUESTION_COPY: Record<string, { checkbox: string; select: string; generic: string }> = {
+  "en-IN": { checkbox: "Should I check “%s”? Please answer yes or no.", select: "Which option should I choose for “%s”? Options: %s. Say the option or its number.", generic: "What should I enter for “%s”?" },
+  "hi-IN": { checkbox: "क्या मैं “%s” चुनूँ? कृपया हाँ या नहीं में जवाब दें।", select: "“%s” के लिए इनमें से कौन-सा विकल्प चुनूँ? %s। विकल्प का नाम या उसका क्रमांक बताइए।", generic: "“%s” के लिए कौन-सी जानकारी भरूँ? हिंदी में जवाब दें; मैं इसे अंग्रेज़ी में लिखूँगा।" },
+  "ta-IN": { checkbox: "“%s” என்பதைத் தேர்ந்தெடுக்கவா? ஆம் அல்லது இல்லை என்று சொல்லுங்கள்.", select: "“%s” என்பதற்கு எந்த விருப்பத்தைத் தேர்ந்தெடுக்க வேண்டும்? விருப்பங்கள்: %s. பெயர் அல்லது எண்ணைச் சொல்லுங்கள்.", generic: "“%s” என்பதற்கு என்ன தகவலை உள்ளிட வேண்டும்?" },
+  "te-IN": { checkbox: "“%s”ను ఎంచుకోవాలా? అవును లేదా కాదు అని చెప్పండి.", select: "“%s” కోసం ఏ ఎంపికను ఎంచుకోవాలి? ఎంపికలు: %s. పేరు లేదా సంఖ్య చెప్పండి.", generic: "“%s” కోసం ఏ సమాచారం నమోదు చేయాలి?" },
+  "kn-IN": { checkbox: "“%s” ಆಯ್ಕೆ ಮಾಡಬೇಕೇ? ಹೌದು ಅಥವಾ ಇಲ್ಲ ಎಂದು ಹೇಳಿ.", select: "“%s” ಗೆ ಯಾವ ಆಯ್ಕೆ ಮಾಡಬೇಕು? ಆಯ್ಕೆಗಳು: %s. ಹೆಸರು ಅಥವಾ ಸಂಖ್ಯೆ ಹೇಳಿ.", generic: "“%s” ಗೆ ಯಾವ ಮಾಹಿತಿಯನ್ನು ನಮೂದಿಸಬೇಕು?" },
+  "mr-IN": { checkbox: "“%s” निवडू का? कृपया हो किंवा नाही असे सांगा.", select: "“%s” साठी कोणता पर्याय निवडू? पर्याय: %s. नाव किंवा क्रमांक सांगा.", generic: "“%s” साठी कोणती माहिती भरू?" },
+  "gu-IN": { checkbox: "શું “%s” પસંદ કરું? કૃપા કરીને હા અથવા ના કહો.", select: "“%s” માટે કયો વિકલ્પ પસંદ કરું? વિકલ્પો: %s. નામ અથવા નંબર કહો.", generic: "“%s” માટે કઈ માહિતી ભરું?" },
+  "bn-IN": { checkbox: "“%s” নির্বাচন করব? হ্যাঁ বা না বলুন।", select: "“%s”-এর জন্য কোন বিকল্পটি নেব? বিকল্প: %s। নাম বা নম্বর বলুন।", generic: "“%s”-এর জন্য কী তথ্য দেব?" },
+  "pa-IN": { checkbox: "ਕੀ ਮੈਂ “%s” ਚੁਣਾਂ? ਹਾਂ ਜਾਂ ਨਹੀਂ ਦੱਸੋ।", select: "“%s” ਲਈ ਕਿਹੜਾ ਵਿਕਲਪ ਚੁਣਾਂ? ਵਿਕਲਪ: %s। ਨਾਮ ਜਾਂ ਨੰਬਰ ਦੱਸੋ।", generic: "“%s” ਲਈ ਕਿਹੜੀ ਜਾਣਕਾਰੀ ਭਰਾਂ?" },
+  "ml-IN": { checkbox: "“%s” തിരഞ്ഞെടുക്കട്ടേ? അതെ അല്ലെങ്കിൽ ഇല്ല എന്ന് പറയുക.", select: "“%s” എന്നതിന് ഏത് ഓപ്ഷൻ തിരഞ്ഞെടുക്കണം? ഓപ്ഷനുകൾ: %s. പേരോ നമ്പറോ പറയുക.", generic: "“%s” എന്നതിന് എന്ത് വിവരമാണ് നൽകേണ്ടത്?" },
+};
+
+function localizedFormQuestion(field: FormFieldDescriptor, languageCode: string): string {
+  const copy = FORM_QUESTION_COPY[languageCode] || FORM_QUESTION_COPY["en-IN"];
+  const label = field.label.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (field.kind === "checkbox") return copy.checkbox.replace("%s", label);
+  if (field.kind === "select" || field.kind === "radio") {
+    return copy.select.replace("%s", label).replace("%s", field.options?.filter(Boolean).join(", ") || "");
+  }
+  return copy.generic.replace("%s", label);
+}
+
+const ACTION_TAG_TRANSLATIONS: Record<string, Record<string, string>> = {
+  "hi-IN": { click: "क्लिक", type: "लिखें", select: "चुनें", scroll: "स्क्रॉल", navigate: "पेज खोलें", ask_user: "पूछें", done: "पूरा" },
+  "ta-IN": { click: "அழுத்து", type: "உள்ளிடு", select: "தேர்வு", scroll: "உருட்டு", navigate: "பக்கம் திற", ask_user: "கேள்", done: "முடிந்தது" },
+  "te-IN": { click: "క్లిక్", type: "నమోదు", select: "ఎంపిక", scroll: "స్క్రోల్", navigate: "పేజీ తెరువు", ask_user: "అడుగు", done: "పూర్తి" },
+  "kn-IN": { click: "ಕ್ಲಿಕ್", type: "ನಮೂದಿಸಿ", select: "ಆಯ್ಕೆ", scroll: "ಸ್ಕ್ರಾಲ್", navigate: "ಪುಟ ತೆರೆಯಿರಿ", ask_user: "ಕೇಳಿ", done: "ಪೂರ್ಣ" },
+  "mr-IN": { click: "क्लिक", type: "भरा", select: "निवडा", scroll: "स्क्रोल", navigate: "पृष्ठ उघडा", ask_user: "विचारा", done: "पूर्ण" },
+  "gu-IN": { click: "ક્લિક", type: "ભરો", select: "પસંદ કરો", scroll: "સ્ક્રોલ", navigate: "પેજ ખોલો", ask_user: "પૂછો", done: "પૂર્ણ" },
+  "bn-IN": { click: "ক্লিক", type: "লিখুন", select: "বেছে নিন", scroll: "স্ক্রল", navigate: "পৃষ্ঠা খুলুন", ask_user: "জিজ্ঞাসা", done: "সম্পন্ন" },
+  "pa-IN": { click: "ਕਲਿੱਕ", type: "ਭਰੋ", select: "ਚੁਣੋ", scroll: "ਸਕ੍ਰੋਲ", navigate: "ਪੰਨਾ ਖੋਲ੍ਹੋ", ask_user: "ਪੁੱਛੋ", done: "ਪੂਰਾ" },
+  "ml-IN": { click: "ക്ലിക്ക്", type: "നൽകുക", select: "തിരഞ്ഞെടുക്കുക", scroll: "സ്ക്രോൾ", navigate: "പേജ് തുറക്കുക", ask_user: "ചോദിക്കുക", done: "പൂർത്തിയായി" },
+};
 
 function cropCapturedImage(dataUrl: string, rect: { x: number; y: number; width: number; height: number }, viewportWidth: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -438,7 +477,7 @@ export const App: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
   const translate = (english: string, hindi: string) => {
-    const language = settings.languageCode as InterfaceLanguage;
+    const language = resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript) as InterfaceLanguage;
     return UI_TRANSLATIONS[english]?.[language] || (language === "hi-IN" ? hindi : english);
   };
 
@@ -681,34 +720,41 @@ export const App: React.FC = () => {
   /**
    * Helper to speak using Gnani Timbre with Hindi / Indic language support
    */
-  const speakStatus = async (text: string, languageCode = settings.languageCode) => {
+  const speakStatus = async (text: string, languageCode = resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript)) => {
     if (isStoppedRef.current || !text) return;
-    const queuedSpeech = ttsQueueRef.current.catch(() => {}).then(async () => {
-      if (isStoppedRef.current) return;
-      setStatus("speaking");
-      setStatusText(text);
-      const gnaniConfig: GnaniConfig = {
-        apiKey: settings.gnaniApiKey,
-        languageCode,
-        ttsVoice: "Nalini",
-        ttsModel: "timbre-v2.5",
-      };
-      await speakWithTimbre(text, gnaniConfig);
-      if (!isStoppedRef.current) setStatus("idle");
-    });
-    ttsQueueRef.current = queuedSpeech.catch(() => {});
-    await queuedSpeech;
+    setStatus("speaking");
+    setStatusText(text);
+
+    const gnaniConfig: GnaniConfig = {
+      apiKey: settings.gnaniApiKey,
+      languageCode,
+      ttsVoice: "Nalini",
+      ttsModel: "timbre-v2.5",
+    };
+
+    await speakWithTimbre(text, gnaniConfig);
+    if (!isStoppedRef.current) {
+      setStatus("idle");
+    }
+  };
+
+  const getActionOutcomeSpeech = (action: PlannerAction, snapshot: PageSnapshot): string => {
+    const languageCode = resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || "");
+    if (["click", "type", "select", "scroll", "navigate"].includes(action.action)) {
+      return localizedActionSpeech(action, snapshot, languageCode);
+    }
+    return action.action === "done" ? action.summary : action.action === "ask_user" ? action.question : "Action completed.";
   };
 
   const askNextFormField = async () => {
     const session = formFillRef.current;
     const field = session?.fields[session.index];
     if (!session || !field) return;
-    const question = buildFormFieldQuestion(field);
+    const question = localizedFormQuestion(field, resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || ""));
     setStatus("idle");
-    setStatusText(`Field ${session.index + 1} of ${session.fields.length}: ${field.label}`);
-    await speakStatus(question, "hi-IN");
-    setStatusText(`Reply with a value for: ${field.label}`);
+    setStatusText(`${translate("Field", "फ़ील्ड")} ${session.index + 1} / ${session.fields.length}: ${field.label}`);
+    await speakStatus(question);
+    setStatusText(`${translate("Reply with a value for", "इसके लिए जानकारी दें")}: ${field.label}`);
   };
 
   const submitFormFieldAnswer = async (answer: string) => {
@@ -807,14 +853,15 @@ export const App: React.FC = () => {
           if (!response?.ok) throw new Error(response?.error || `Could not fill ${field.label}.`);
 
           const stepNumber = stepsRef.current.length + 1;
+          const fieldOutcome = localizedActionSpeech(validation.action, freshSnapshot, resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript));
           setSteps((previous) => [...previous, {
             stepNumber,
             action: validation.action,
             status: "success",
-            spokenSummary: `Filled ${field.label}.`,
+            spokenSummary: fieldOutcome,
             timestamp: Date.now(),
           }]);
-          await speakStatus(`Filled ${field.label}.`);
+          await speakStatus(fieldOutcome);
         }
       }
       session.completed.add(field.fingerprint);
@@ -1373,8 +1420,402 @@ export const App: React.FC = () => {
     }
 
     isStoppedRef.current = false;
-    if (!resumeExistingTask) {
-      formFillRef.current = null;
+    if (!resumeExistingTask) setSteps([]);
+    setStatus("thinking");
+    setStatusText(translate("Analyzing page...", "पेज का विश्लेषण हो रहा है..."));
+
+    // A reply to ask_user continues the original task. New commands start a clean context.
+    const isFollowUp = (resumeExistingTask || awaitingUserReplyRef.current) && taskGoalRef.current !== null;
+    if (!isFollowUp) {
+      taskGoalRef.current = initialRequest;
+      conversationRef.current = [{ role: "user" as const, content: initialRequest }];
+    } else if (!resumeExistingTask) {
+      conversationRef.current = [...conversationRef.current, { role: "user" as const, content: initialRequest }].slice(-6);
+    }
+    const taskGoal = taskGoalRef.current || initialRequest;
+    awaitingUserReplyRef.current = false;
+
+    // --- Check if we're on a restricted page (chrome://, new tab, etc.) ---
+    const tabInfo = await chrome.tabs.get(activeTabId);
+    if (isRestrictedPage(tabInfo.url)) {
+      // Try to resolve navigation intent directly (no LLM needed)
+      const directUrl = resolveDirectNavigationIntent(initialRequest);
+      if (directUrl) {
+        setStatus("executing");
+        setStatusText(`${translate("Opening", "खोल रहे हैं")} ${directUrl}...`);
+        const navAction: PlannerAction = {
+          action: "navigate",
+          url: directUrl,
+          rationale: ACTION_SPEECH[resolveSpeechLanguage(settings.languageCode, initialRequest)]?.opened || ACTION_SPEECH["en-IN"].opened,
+        };
+        setSteps([{
+          stepNumber: 1,
+          action: navAction,
+          status: "success",
+          spokenSummary: navAction.rationale,
+          timestamp: Date.now(),
+        }]);
+        await chrome.tabs.update(activeTabId, { url: directUrl });
+        await speakStatus(navAction.rationale);
+        setStatus("idle");
+        setStatusText(translate("Navigated", "पेज खुल गया है"));
+        return;
+      }
+      // Can't do anything else on restricted pages
+      setStatus("idle");
+      setStatusText(translate("⚠️ Please go to a normal webpage first", "⚠️ पहले सामान्य वेबपेज खोलें"));
+      alert(
+        "Browse Voice cannot control Chrome's built-in pages (new tab, chrome://settings, etc.).\n\n" +
+        "Please navigate to any website (e.g. google.com) and then give your command."
+      );
+      return;
+    }
+
+    // 1. Activate on-page visual indicator
+    await sendTabMessage(activeTabId, {
+      type: "BV_ACTIVATE_AGENT",
+      statusText: "Processing",
+    });
+
+    const planner: PlannerProvider = createPlanner({
+      provider: settings.llmProvider,
+      apiKey: settings.llmApiKey,
+      endpoint: settings.llmEndpoint,
+      model: settings.llmModel,
+    });
+
+    let currentSnapshot = await fetchPageSnapshot(activeTabId);
+    const formFillIntent = /\b(fill|complete|populate|enter details|register|sign up|apply for|bhar(?:o|na|do|de))\b|फॉर्म|फ़ॉर्म|भर(?:ो|ना|ें)/i.test(taskGoal);
+    if (!formFillRef.current && formFillIntent) {
+      const { fields, manualFields } = collectFormFields(currentSnapshot);
+      if (manualFields.length > 0) {
+        await sendTabMessage(activeTabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: manualFields });
+      }
+      if (fields.length > 0) {
+        formFillRef.current = {
+          tabId: activeTabId,
+          goal: taskGoal,
+          fields,
+          index: 0,
+          completed: new Set(),
+          skippedManualCount: manualFields.length,
+        };
+        if (manualFields.length > 0) {
+          await speakStatus("I will leave sensitive and file fields for you to handle manually. I will ask about every other visible field one at a time.");
+        }
+        await askNextFormField();
+        return;
+      }
+    }
+
+    let stepCount = resumeExistingTask ? stepsRef.current.length : 0;
+    const MAX_STEPS = 15;
+    let refreshedAfterStaleElement = false;
+    let lastSuccessfulRepeatableAction: string | null = null;
+    let lastSkippedRepeatedAction: string | null = null;
+
+    while (stepCount < MAX_STEPS) {
+      if (isStoppedRef.current) break;
+      stepCount++;
+
+      setStatus("thinking");
+        setStatusText(`${translate("Step", "स्टेप")} ${stepCount}: ${translate("Planning next action...", "अगली कार्रवाई की योजना बन रही है...")}`);
+
+      // 2. Query Planner
+      let action: PlannerAction;
+      try {
+        action = await planner.plan({
+          userRequest: taskGoal,
+          languageCode: resolveSpeechLanguage(settings.languageCode, taskGoal),
+          snapshot: currentSnapshot,
+          history: stepsRef.current.slice(-5),
+          conversation: conversationRef.current,
+        });
+      } catch (planErr) {
+        const errMsg = planErr instanceof Error ? planErr.message : "Planning error.";
+        await speakStatus(`योजना बनाने में त्रुटि: ${errMsg}`);
+        if (isFollowUp) awaitingUserReplyRef.current = true;
+        break;
+      }
+
+      if (isStoppedRef.current) break;
+
+      // A model may confuse opening the payment page with finishing payment.
+      // Never accept that completion unless the visible snapshot contains a receipt.
+      if (action.action === "done" && isPaymentIntent(taskGoal) && !hasPaymentReceipt(currentSnapshot.summary)) {
+        const continueToPayment = currentSnapshot.interactiveElements.find((element) =>
+          (element.tag === "button" || element.role === "button") &&
+          /continue.{0,30}payment|proceed.{0,20}pay|भुगतान.{0,20}(?:आगे|जारी)/i.test(element.label),
+        );
+
+        if (continueToPayment && !hasVisiblePaymentForm(currentSnapshot)) {
+          action = {
+            action: "click",
+            id: continueToPayment.id,
+            rationale: "Opening the payment page; payment is not complete yet.",
+          };
+        } else {
+          action = {
+            action: "ask_user",
+            question: hasVisiblePaymentForm(currentSnapshot)
+              ? "भुगतान फ़ॉर्म खुला है। कार्ड, UPI या अन्य गोपनीय जानकारी आप स्वयं भरें। भुगतान करना हो तो राशि जाँचकर पुष्टि करें।"
+              : "अभी भुगतान की रसीद दिखाई नहीं दे रही है, इसलिए मैं भुगतान पूरा होने की पुष्टि नहीं कर सकता। क्या आप चाहेंगे कि मैं अगला कदम जारी रखूँ?",
+            rationale: "भुगतान की पुष्टि के लिए रसीद दिखाई देनी चाहिए।",
+          };
+        }
+      }
+
+      const repeatableActionKey = getRepeatableActionKey(action);
+      if (repeatableActionKey && repeatableActionKey === lastSuccessfulRepeatableAction) {
+        const duplicateNotice = ({
+          "hi-IN": "यह कार्रवाई पहले ही पूरी हो चुकी है। मैं इसे दोबारा नहीं करूँगा।",
+          "ta-IN": "இந்தச் செயலை ஏற்கனவே செய்துவிட்டேன். மீண்டும் செய்யமாட்டேன்.",
+          "te-IN": "ఈ చర్య ఇప్పటికే పూర్తయింది. దీన్ని మళ్లీ చేయను.",
+          "kn-IN": "ಈ ಕ್ರಿಯೆಯನ್ನು ಈಗಾಗಲೇ ಮಾಡಿದ್ದೇನೆ. ಮತ್ತೆ ಮಾಡುವುದಿಲ್ಲ.",
+          "mr-IN": "ही कृती आधीच पूर्ण झाली आहे. मी ती पुन्हा करणार नाही.",
+          "gu-IN": "આ ક્રિયા પહેલેથી થઈ ગઈ છે. હું તેને ફરીથી નહીં કરું.",
+          "bn-IN": "এই কাজটি আগেই করা হয়েছে। আমি এটি আবার করব না।",
+          "pa-IN": "ਇਹ ਕਾਰਵਾਈ ਪਹਿਲਾਂ ਹੀ ਹੋ ਚੁੱਕੀ ਹੈ। ਮੈਂ ਇਸਨੂੰ ਦੁਬਾਰਾ ਨਹੀਂ ਕਰਾਂਗਾ।",
+          "ml-IN": "ഈ പ്രവർത്തനം ഇതിനകം പൂർത്തിയായി. ഇത് വീണ്ടും ചെയ്യില്ല.",
+        } as Record<string, string>)[resolveSpeechLanguage(settings.languageCode, taskGoal)] || "That action is already complete. I will not repeat it.";
+        if (repeatableActionKey === lastSkippedRepeatedAction) {
+          await speakStatus(duplicateNotice);
+          break;
+        }
+        lastSkippedRepeatedAction = repeatableActionKey;
+        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: duplicateNotice }].slice(-6);
+        await speakStatus(duplicateNotice);
+        currentSnapshot = await fetchPageSnapshot(activeTabId);
+        continue;
+      }
+
+      // 3. Inspect Action Safety
+      const safety = inspectActionSafety(action, currentSnapshot);
+
+      // SENSITIVE FIELD BLOCKED
+      if (!safety.permitted) {
+        const speech = safety.safetyAlertSpeech || "This field contains sensitive information. Please fill it manually.";
+        const entry: StepLogEntry = {
+          stepNumber: stepCount,
+          action,
+          status: "blocked",
+          spokenSummary: speech,
+          details: safety.reason,
+          timestamp: Date.now(),
+        };
+        setSteps((prev) => [...prev, entry]);
+        await speakStatus(speech);
+        break;
+      }
+
+      // SUBMIT / PAYMENT CONFIRMATION GATING
+      const userExplicitlyConfirmedAction =
+        isPaymentIntent(taskGoal) &&
+        /\bconfirm(?:ed)?\b|पुष्टि|कन्फर्म/i.test(initialRequest);
+      if (safety.requiresConfirmation && !userExplicitlyConfirmedAction) {
+        setStatus("confirmation");
+        const confirmSpeech = safety.safetyAlertSpeech || "Do you want to confirm this action? Say yes to continue.";
+        setStatusText(translate("Waiting for confirmation", "पुष्टि की प्रतीक्षा है"));
+        setPendingConfirmationAction(action);
+        setConfirmationMessage(confirmSpeech);
+
+        const entry: StepLogEntry = {
+          stepNumber: stepCount,
+          action,
+          status: "confirmation_required",
+          spokenSummary: confirmSpeech,
+          details: safety.reason,
+          timestamp: Date.now(),
+        };
+        setSteps((prev) => [...prev, entry]);
+
+        await speakStatus(confirmSpeech);
+        // Wait for user to say "haan" / "yes" or click confirm button
+        return; // Pause loop until confirmation event
+      }
+
+      // Check for DONE action
+      if (action.action === "done") {
+        const entry: StepLogEntry = {
+          stepNumber: stepCount,
+          action,
+          status: "success",
+          spokenSummary: action.summary,
+          timestamp: Date.now(),
+        };
+        setSteps((prev) => [...prev, entry]);
+        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: action.summary }].slice(-6);
+        await speakStatus(action.summary);
+        setStatus("idle");
+        setStatusText(translate("Completed", "पूरा हुआ"));
+        taskGoalRef.current = null;
+        conversationRef.current = [];
+        awaitingUserReplyRef.current = false;
+        break;
+      }
+
+      // Check for ASK_USER action
+      if (action.action === "ask_user") {
+        const entry: StepLogEntry = {
+          stepNumber: stepCount,
+          action,
+          status: "success",
+          spokenSummary: action.question,
+          timestamp: Date.now(),
+        };
+        setSteps((prev) => [...prev, entry]);
+        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: action.question }].slice(-6);
+        awaitingUserReplyRef.current = true;
+        await speakStatus(action.question);
+        setStatus("idle");
+        setStatusText(translate("Awaiting response", "जवाब की प्रतीक्षा है"));
+        break;
+      }
+
+      // 4. Execute Action in Tab
+      setStatus("executing");
+      setStatusText(`${translate("Step", "स्टेप")} ${stepCount}: ${translate("Executing", "कार्रवाई हो रही है")} ${action.action}...`);
+
+      const execResponse = await sendTabMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(activeTabId, {
+        type: "BV_EXECUTE_ACTION",
+        action,
+      });
+
+      if (!execResponse?.ok) {
+        const err = execResponse?.error || "Action execution failed.";
+        if (/element id \[\d+\] was not found in the current page/i.test(err) && !refreshedAfterStaleElement) {
+          refreshedAfterStaleElement = true;
+          setStatus("thinking");
+          setStatusText(translate("Page changed; refreshing before retrying...", "पेज बदल गया है; दोबारा कोशिश करने से पहले रीफ़्रेश कर रहे हैं..."));
+          try {
+            currentSnapshot = await fetchPageSnapshot(activeTabId);
+            stepCount -= 1;
+            continue;
+          } catch {
+            // Fall through and report the original action failure if the page cannot be refreshed.
+          }
+        }
+        setSteps((prev) => [
+          ...prev,
+          {
+            stepNumber: stepCount,
+            action,
+            status: "failed",
+            details: err,
+            timestamp: Date.now(),
+          },
+        ]);
+          const failurePrefix = ({
+            "hi-IN": "कार्रवाई पूरी नहीं हुई:", "ta-IN": "செயல் தோல்வியடைந்தது:", "te-IN": "చర్య విఫలమైంది:",
+            "kn-IN": "ಕ್ರಿಯೆ ವಿಫಲವಾಗಿದೆ:", "mr-IN": "कृती अयशस्वी झाली:", "gu-IN": "ક્રિયા નિષ્ફળ ગઈ:",
+            "bn-IN": "কাজটি ব্যর্থ হয়েছে:", "pa-IN": "ਕਾਰਵਾਈ ਅਸਫਲ ਰਹੀ:", "ml-IN": "പ്രവർത്തനം പരാജയപ്പെട്ടു:",
+          } as Record<string, string>)[resolveSpeechLanguage(settings.languageCode, taskGoal)] || "Action failed:";
+          await speakStatus(`${failurePrefix} ${err}`);
+        break;
+      }
+
+      lastSuccessfulRepeatableAction = repeatableActionKey;
+      lastSkippedRepeatedAction = null;
+
+      // Record successful step
+      const outcomeSpeech = getActionOutcomeSpeech(action, currentSnapshot);
+      conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: outcomeSpeech }].slice(-6);
+      setSteps((prev) => [
+        ...prev,
+        {
+          stepNumber: stepCount,
+          action,
+          status: "success",
+          spokenSummary: outcomeSpeech,
+          timestamp: Date.now(),
+        },
+      ]);
+
+      // Speak the result after the page action has completed.
+      await speakStatus(outcomeSpeech);
+
+      // Re-observe
+      if (execResponse.freshSnapshot) {
+        currentSnapshot = execResponse.freshSnapshot;
+      } else {
+        currentSnapshot = await fetchPageSnapshot(activeTabId);
+      }
+    }
+
+    if (stepCount >= MAX_STEPS) {
+      await speakStatus("The maximum of 15 steps has been reached. The task was stopped.");
+    }
+  };
+
+  /**
+   * Resumes the loop after the user gives confirmation for submit/payment
+   */
+  const confirmAndResumeAction = async () => {
+    if (!pendingConfirmationAction || !activeTabId) return;
+    const actionToRun = pendingConfirmationAction;
+    setPendingConfirmationAction(null);
+    setConfirmationMessage("");
+
+    setStatus("executing");
+      setStatusText(translate("Executing confirmed action...", "पुष्टि की गई कार्रवाई हो रही है..."));
+
+    let execResponse: { ok?: boolean; error?: string; result?: { success?: boolean; error?: string }; freshSnapshot?: PageSnapshot } | undefined;
+    try {
+      execResponse = await sendTabMessage(activeTabId, {
+        type: "BV_EXECUTE_ACTION",
+        action: actionToRun,
+      });
+    } catch (error) {
+      execResponse = { ok: false, error: error instanceof Error ? error.message : "The confirmed action could not be completed." };
+    }
+
+    if (!execResponse?.ok || execResponse.result?.success === false) {
+      const error = execResponse?.error || execResponse?.result?.error || "The page did not complete the confirmed action.";
+      setSteps((previous) => [...previous, {
+        stepNumber: previous.length + 1,
+        action: actionToRun,
+        status: "failed",
+        details: error,
+        timestamp: Date.now(),
+      }]);
+      await speakStatus(`कार्रवाई पूरी नहीं हुई: ${error}`);
+      setStatus("idle");
+      setStatusText(translate("Action could not be completed", "कार्रवाई पूरी नहीं हो सकी"));
+      awaitingUserReplyRef.current = true;
+      return;
+    }
+
+    const freshSnapshot = execResponse.freshSnapshot || await fetchPageSnapshot(activeTabId);
+    const paymentReceiptVisible = hasPaymentReceipt(freshSnapshot.summary);
+    const paymentLanguage = resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript);
+    const paymentConfirmations: Record<string, { receipt: string; continued: string }> = {
+      "en-IN": { receipt: "The payment receipt is visible. Payment is confirmed.", continued: "The confirmed action is complete. I am checking the next step." },
+      "hi-IN": { receipt: "भुगतान की रसीद दिखाई दे रही है। भुगतान की पुष्टि हो गई है।", continued: "पुष्टि की गई कार्रवाई पूरी हुई। अब अगला कदम जाँच रहा हूँ।" },
+      "ta-IN": { receipt: "கட்டண ரசீது தெரிகிறது. கட்டணம் உறுதிப்படுத்தப்பட்டது.", continued: "உறுதிப்படுத்திய செயல் முடிந்தது. அடுத்த படியைச் சரிபார்க்கிறேன்." },
+      "te-IN": { receipt: "చెల్లింపు రసీదు కనిపిస్తోంది. చెల్లింపు నిర్ధారించబడింది.", continued: "ధృవీకరించిన చర్య పూర్తయింది. తదుపరి దశను చూస్తున్నాను." },
+      "kn-IN": { receipt: "ಪಾವತಿ ರಸೀದಿ ಕಾಣುತ್ತಿದೆ. ಪಾವತಿ ದೃಢವಾಗಿದೆ.", continued: "ದೃಢೀಕರಿಸಿದ ಕ್ರಿಯೆ ಪೂರ್ಣಗೊಂಡಿದೆ. ಮುಂದಿನ ಹಂತವನ್ನು ಪರಿಶೀಲಿಸುತ್ತಿದ್ದೇನೆ." },
+      "mr-IN": { receipt: "पेमेंटची पावती दिसत आहे. पेमेंटची पुष्टी झाली.", continued: "पुष्टी केलेली कृती पूर्ण झाली. पुढील टप्पा तपासत आहे." },
+      "gu-IN": { receipt: "ચુકવણીની રસીદ દેખાય છે. ચુકવણીની પુષ્ટિ થઈ છે.", continued: "પુષ્ટિ કરેલી ક્રિયા પૂર્ણ થઈ. હવે આગળનું પગલું તપાસું છું." },
+      "bn-IN": { receipt: "পেমেন্টের রসিদ দেখা যাচ্ছে। পেমেন্ট নিশ্চিত হয়েছে।", continued: "নিশ্চিত করা কাজটি শেষ হয়েছে। পরের ধাপ দেখছি।" },
+      "pa-IN": { receipt: "ਭੁਗਤਾਨ ਦੀ ਰਸੀਦ ਦਿਖ ਰਹੀ ਹੈ। ਭੁਗਤਾਨ ਦੀ ਪੁਸ਼ਟੀ ਹੋ ਗਈ ਹੈ।", continued: "ਪੁਸ਼ਟੀ ਕੀਤੀ ਕਾਰਵਾਈ ਪੂਰੀ ਹੋ ਗਈ। ਹੁਣ ਅਗਲਾ ਕਦਮ ਦੇਖ ਰਿਹਾ ਹਾਂ।" },
+      "ml-IN": { receipt: "പണമടച്ച രസീത് കാണുന്നു. പണമടച്ചത് സ്ഥിരീകരിച്ചു.", continued: "സ്ഥിരീകരിച്ച നടപടി പൂർത്തിയായി. അടുത്ത ഘട്ടം പരിശോധിക്കുന്നു." },
+    };
+    const confirmationCopy = paymentConfirmations[paymentLanguage] || paymentConfirmations["en-IN"];
+    const actionSummary = paymentReceiptVisible ? confirmationCopy.receipt : confirmationCopy.continued;
+    const nextSteps = [...stepsRef.current, {
+      stepNumber: stepsRef.current.length + 1,
+      action: actionToRun,
+      status: "success",
+      spokenSummary: actionSummary,
+      timestamp: Date.now(),
+    }];
+    stepsRef.current = nextSteps;
+    setSteps(nextSteps);
+
+    if (paymentReceiptVisible) {
+      await speakStatus(actionSummary);
+      setStatus("idle");
+      setStatusText(translate("Payment receipt confirmed", "भुगतान की रसीद की पुष्टि हुई"));
       taskGoalRef.current = null;
       conversationRef.current = [];
       awaitingUserReplyRef.current = false;
@@ -1467,7 +1908,7 @@ export const App: React.FC = () => {
 
     try {
       if (settings.gnaniApiKey) {
-        const speechLanguage = formFillRef.current ? "hi-IN" : settings.languageCode;
+        const speechLanguage = settings.languageCode;
         gnaniWsRef.current = new GnaniPrismaWebSocketClient(
           { apiKey: settings.gnaniApiKey, languageCode: speechLanguage, sttModel: "prisma-v3.0" },
           (text) => {
@@ -1495,7 +1936,7 @@ export const App: React.FC = () => {
             void voiceTurnHandlerRef.current(text);
           }
         },
-        formFillRef.current ? "hi-IN" : settings.languageCode,
+        settings.languageCode,
       );
     } catch (error) {
       voiceSessionActiveRef.current = false;
@@ -1613,7 +2054,8 @@ export const App: React.FC = () => {
     const nextSettings = { ...settings, languageCode };
     setSettings(nextSettings);
     chrome.storage.local.set({ browseVoiceSettings: nextSettings });
-    setStatusText(languageCode === "hi-IN" ? "तैयार" : "Ready");
+    const resolvedLanguage = resolveSpeechLanguage(languageCode, taskGoalRef.current || transcript) as InterfaceLanguage;
+    setStatusText(UI_TRANSLATIONS.Ready?.[resolvedLanguage] || (resolvedLanguage === "hi-IN" ? "तैयार" : "Ready"));
   };
 
   const taskStatusLabel = (taskStatus: TaskRunnerStatus): string => {
@@ -1962,8 +2404,8 @@ export const App: React.FC = () => {
               {steps.map((step) => (
                 <div key={step.stepNumber} className={`step-card ${step.status}`}>
                   <div className="step-card-header">
-                    <span className="step-badge">Step {step.stepNumber}</span>
-                    <span className="step-action-tag">{step.action.action.toUpperCase()}</span>
+                    <span className="step-badge">{translate("Step", "चरण")} {step.stepNumber}</span>
+                    <span className="step-action-tag">{ACTION_TAG_TRANSLATIONS[resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript)]?.[step.action.action] || step.action.action.toUpperCase()}</span>
                   </div>
                   {step.action.rationale && (
                     <div className="step-rationale">{step.action.rationale}</div>
