@@ -71,7 +71,7 @@ class FakeBrowser {
         return { ok: true, freshSnapshot: page(tabId, `updated by ${message.action.action}`) };
       }
       if (message.type === "BV_DEACTIVATE_AGENT") {
-        this.deactivations.push({ tabId, sessionId: message.sessionId });
+        this.deactivations.push(tabId);
         return { ok: true };
       }
       return { ok: true };
@@ -304,7 +304,7 @@ test("Stop cancels in-flight workers and deactivates every managed tab", async (
   await wait(30);
 
   assert.equal(browser.executions.length, 0, "a planner result that returns after Stop must not execute");
-  assert.deepEqual(browser.deactivations, [{ tabId: 10, sessionId: 2 }]);
+  assert.deepEqual(browser.deactivations, [10]);
   assert.equal(orchestrator.memory.snapshot().subtasks[0].status, "cancelled");
   assert.equal(browser.tabs.has(10), true, "Stop should leave the user's tab open");
 });

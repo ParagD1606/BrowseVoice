@@ -785,7 +785,7 @@ export class AutonomousOrchestrator {
         if (!["completed", "failed", "cancelled"].includes(subtask.status)) subtask.status = "cancelled";
       });
     });
-    await Promise.all(managedTabs.map((tab) => this.dependencies.browser.sendMessage(tab.tabId, { type: "BV_DEACTIVATE_AGENT", sessionId: this.generation }).catch(() => undefined)));
+    await Promise.all(managedTabs.map((tab) => this.dependencies.browser.sendMessage(tab.tabId, { type: "BV_DEACTIVATE_AGENT" }).catch(() => undefined)));
     if (closeAgentTabs) {
       await Promise.all(this.memory.snapshot().tabs.filter((tab) => tab.createdByAgent && tab.status !== "closed").map(async (tab) => {
         await this.dependencies.browser.removeTab(tab.tabId).catch(() => undefined);
@@ -1000,9 +1000,7 @@ export class AutonomousOrchestrator {
           const current = next.subtasks.find((candidate) => candidate.id === subtaskId);
           if (current) { current.status = "inspecting"; current.currentAction = "observe"; }
         });
-        await this.dependencies.browser.sendMessage(tabId, { type: "BV_ACTIVATE_AGENT", statusText: "Observing", sessionId: generation }).catch(() => undefined);
-        if (generation !== this.generation) return;
-        snapshot = await this.observeTab(tabId, generation);
+        snapshot = await this.observeTab(tabId);
         await this.memory.commit(workerId, "observation-added", `${subtask.title} observed ${snapshot.title || snapshot.url}.`, (next) => {
           const tab = next.tabs.find((candidate) => candidate.tabId === tabId);
           if (tab) {
@@ -1020,7 +1018,7 @@ export class AutonomousOrchestrator {
 
         const latestSubtask = this.memory.snapshot().subtasks.find((candidate) => candidate.id === subtaskId);
         if (latestSubtask?.searchQuery && !latestSubtask.searchExecuted) {
-          const structuredSearch = await this.executeStructuredSearch(latestSubtask, workerId, tabId, snapshot, generation);
+          const structuredSearch = await this.executeStructuredSearch(latestSubtask, workerId, tabId, snapshot);
           if (structuredSearch?.verified) {
             snapshot = structuredSearch.snapshot;
             if (isSimpleSearchWorkflow(latestSubtask)) {
@@ -1109,7 +1107,7 @@ export class AutonomousOrchestrator {
           await this.dependencies.browser.updateTab(tabId, { url: action.url });
           execution = { ok: true };
         } else {
-          execution = await this.dependencies.browser.sendMessage(tabId, { type: "BV_EXECUTE_ACTION", action, sessionId: generation });
+          execution = await this.dependencies.browser.sendMessage(tabId, { type: "BV_EXECUTE_ACTION", action });
         }
         if (!execution?.ok) throw new Error(execution?.error || `Worker action ${action.action} failed.`);
         history.push({ stepNumber: step, action, status: "success", spokenSummary: action.rationale, timestamp: this.now() });
@@ -1140,11 +1138,11 @@ export class AutonomousOrchestrator {
     await this.failWorker(subtaskId, `Worker reached the ${this.maxStepsPerWorker}-step limit.`, false);
   }
 
-  private async observeTab(tabId: number, sessionId?: number): Promise<PageSnapshot> {
+  private async observeTab(tabId: number): Promise<PageSnapshot> {
     let lastError = "Could not observe the worker tab.";
     for (let attempt = 0; attempt < 4; attempt += 1) {
       try {
-        const response = await this.dependencies.browser.sendMessage<{ ok?: boolean; snapshot?: PageSnapshot; error?: string }>(tabId, { type: "BV_GET_SNAPSHOT", sessionId });
+        const response = await this.dependencies.browser.sendMessage<{ ok?: boolean; snapshot?: PageSnapshot; error?: string }>(tabId, { type: "BV_GET_SNAPSHOT" });
         if (response?.ok && response.snapshot) {
           const snapshot = response.snapshot;
           if (attempt === 3 || snapshot.interactiveElements.length > 0 || !/^about:blank$|^chrome:\/\//i.test(snapshot.url)) return snapshot;
@@ -1164,7 +1162,6 @@ export class AutonomousOrchestrator {
     workerId: string,
     tabId: number,
     before: PageSnapshot,
-    sessionId: number,
   ): Promise<{ snapshot: PageSnapshot; verified: boolean } | undefined> {
     const query = subtask.searchQuery?.trim();
     if (!query) return undefined;
@@ -1178,9 +1175,9 @@ export class AutonomousOrchestrator {
       const current = next.subtasks.find((candidate) => candidate.id === subtask.id);
       if (current) { current.status = "executing"; current.currentAction = "type-search-query"; }
     });
-    const typed = await this.dependencies.browser.sendMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(tabId, { type: "BV_EXECUTE_ACTION", action: typeAction, sessionId });
+    const typed = await this.dependencies.browser.sendMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(tabId, { type: "BV_EXECUTE_ACTION", action: typeAction });
     if (!typed?.ok) throw new Error(typed?.error || "Could not enter the search query.");
-    let afterType = typed.freshSnapshot || await this.observeTab(tabId, sessionId);
+    let afterType = typed.freshSnapshot || await this.observeTab(tabId);
     const currentSearchInput = findSearchInput(afterType) || searchInput;
     const submit = findSearchSubmit(afterType);
     const submitAction: PlannerAction = submit
@@ -1188,9 +1185,9 @@ export class AutonomousOrchestrator {
       : { action: "press_key", id: currentSearchInput.id, key: "Enter", rationale: "Submitting the requested search." };
     const submitSafety = inspectActionSafety(submitAction, afterType);
     if (!submitSafety.permitted) throw new Error(submitSafety.reason || "Search submission was blocked by safety policy.");
-    const submitted = await this.dependencies.browser.sendMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(tabId, { type: "BV_EXECUTE_ACTION", action: submitAction, sessionId });
+    const submitted = await this.dependencies.browser.sendMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(tabId, { type: "BV_EXECUTE_ACTION", action: submitAction });
     if (!submitted?.ok) throw new Error(submitted?.error || "Could not submit the search query.");
-    let afterSubmit = submitted.freshSnapshot || await this.observeTab(tabId, sessionId);
+    let afterSubmit = submitted.freshSnapshot || await this.observeTab(tabId);
     const normalizedQuery = query.toLowerCase();
     const hasVerifiedSearchState = (candidate: PageSnapshot) => {
       const inputStillContainsQuery = candidate.interactiveElements.some((element) =>
@@ -1202,7 +1199,7 @@ export class AutonomousOrchestrator {
     };
     for (let attempt = 0; attempt < 3 && !hasVerifiedSearchState(afterSubmit); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 500));
-      afterSubmit = await this.observeTab(tabId, sessionId);
+      afterSubmit = await this.observeTab(tabId);
     }
     const verified = hasVerifiedSearchState(afterSubmit);
     await this.memory.commit(workerId, "search-verified", verified ? `${subtask.title} verified the search results.` : `${subtask.title} could not verify the search result state.`, (next) => {
