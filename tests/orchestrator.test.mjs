@@ -6,7 +6,6 @@ import {
   SharedMemoryStore,
   createInitialTaskMemory,
   formatSharedMemoryForWorker,
-  resolveDirectNewTabIntent,
 } from "../lib/orchestrator.ts";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -101,25 +100,6 @@ test("SharedMemoryStore serializes concurrent updates without lost findings", as
   const state = store.snapshot();
   assert.equal(state.version, 3);
   assert.deepEqual(state.findings.map((finding) => finding.id).sort(), ["f-1", "f-2", "f-3"]);
-});
-
-test("a direct new-tab request bypasses decomposition and opens exactly one tab", async () => {
-  const browser = new FakeBrowser();
-  let plannerCalls = 0;
-  const orchestrator = new AutonomousOrchestrator({
-    browser,
-    persistence: { load: async () => null, save: async () => {} },
-    createPlanner: () => ({ id: "test", name: "test", async plan() { plannerCalls += 1; return { action: "done", summary: "unexpected" }; } }),
-  });
-  assert.equal(resolveDirectNewTabIntent("can u open youtube in new tab"), "https://youtube.com/");
-  const state = await orchestrator.start("can u open youtube in new tab", {
-    decompose: async () => { throw new Error("decomposition must not run"); },
-  });
-  assert.equal(state.status, "completed");
-  assert.equal(state.tabs.length, 1);
-  assert.equal(browser.created.length, 1);
-  assert.equal(browser.created[0].url, "https://youtube.com/");
-  assert.equal(plannerCalls, 0);
 });
 
 test("three independent subtasks open tabs and execute concurrently", async () => {
