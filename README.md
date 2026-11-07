@@ -27,6 +27,18 @@ It can be useful for anyone who wants a little more guidance while using the web
 
 If something is unclear or information is missing, Browse Voice can ask a follow-up question. You can stop it at any time.
 
+### Run independent tasks in parallel
+
+Browse Voice can split one command into up to four independent browser tasks. Each task gets its own background tab, planner loop, activity card, and on-page “Browse Voice active” indicator. For example:
+
+```text
+open youtube in one tab and google on other tab and search lucku man in youtube and shinchan in google
+```
+
+The tasks run concurrently and Browse Voice reports one combined summary when they finish. The parallel task limit is configurable in **Settings** and defaults to three. Browse Voice keeps the current tab focused unless you enable the option to focus the first completed task tab.
+
+Each task still uses the same safety controls: sensitive fields remain user-only, submit/payment actions require a separate confirmation, and the global **Stop** control aborts every running task.
+
 ## You stay in control
 
 - Browse Voice asks you for the information it needs and works through tasks in visible steps.
