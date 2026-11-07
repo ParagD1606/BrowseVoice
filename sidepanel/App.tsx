@@ -59,6 +59,7 @@ import {
   type SiteIndexStatus,
 } from "../lib/site-chat";
 import { requestSiteSafety, type SiteSafetyResult } from "../lib/site-safety";
+import { recognizeImageText } from "../lib/ocr";
 
 type AgentStatus =
   | "idle"
@@ -1009,10 +1010,19 @@ export const App: React.FC = () => {
       if (!capture?.ok || !capture.dataUrl) throw new Error(capture?.error || "Could not capture the selected page.");
 
       const croppedImage = await cropCapturedImage(capture.dataUrl, selectionResponse.selection.rect, selectionResponse.selection.viewportWidth);
+      setStatusText(translate("Reading text in selected area...", "चयनित क्षेत्र का पाठ पढ़ रहे हैं..."));
+      let ocrText = "";
+      try {
+        const language = settingsRef.current.languageCode;
+        const ocrLanguage = language === "hi-IN" ? "eng+hin" : language === "mr-IN" ? "eng+mar" : "eng";
+        ocrText = (await recognizeImageText(croppedImage, ocrLanguage)).text;
+      } catch (ocrError) {
+        console.warn("OCR could not read the selected area; image remains available for vision models.", ocrError);
+      }
       const newSnip: SnipContext = {
         id: `snip-${Date.now()}`,
         imageDataUrl: croppedImage,
-        text: selectionResponse.selection.text,
+        text: [selectionResponse.selection.text, ocrText].filter(Boolean).join("\n"),
         elements: selectionResponse.selection.elements,
         title: selectionResponse.selection.title,
         url: selectionResponse.selection.url,
@@ -1231,7 +1241,10 @@ export const App: React.FC = () => {
       setStatusText(translate("Answer ready", "जवाब तैयार है"));
       await speakStatus(answer.text.slice(0, 500));
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not answer from the selected area.";
+      const ocrText = snips.map((snip) => snip.text.trim()).filter(Boolean).join(" ");
+      const message = ocrText
+        ? `The selected area reads “${ocrText.slice(0, 700)}”. I couldn’t reach the answer model, so this is the OCR transcription.`
+        : err instanceof Error ? err.message : "Could not answer from the selected area.";
       setChatMessages((previous) => [...previous, { id: `assistant-${Date.now()}`, role: "assistant", text: message }]);
       setStatus("idle");
       setStatusText(translate("Could not answer", "जवाब नहीं मिल सका"));

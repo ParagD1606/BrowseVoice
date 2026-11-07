@@ -1,5 +1,8 @@
 {
   "manifest_version": 3,
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "name": "Browse Voice",
   "version": "1.0.0",
   "description": "Voice-controlled agentic browser assistant for Indian-language users powered by Gnani AI.",

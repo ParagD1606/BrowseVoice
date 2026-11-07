@@ -24,7 +24,8 @@
   "homepage": "https://github.com/ParagD1606/BrowseVoice#readme",
   "dependencies": {
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.7",
