@@ -59,8 +59,8 @@ type AgentStatus =
 interface SettingsState {
   gnaniApiKey: string;
   languageCode: string;
-  /** "gemini" = Google AI Studio, "openai-compatible" = any OpenAI-spec API, "mock" = offline demo */
-  llmProvider: "mock" | "openai-compatible" | "gemini";
+  /** Planner API used for browser actions. */
+  llmProvider: "mock" | "openai-compatible" | "huggingface" | "gemini";
   llmApiKey: string;
   llmEndpoint: string;
   llmModel: string;
@@ -90,18 +90,21 @@ interface FormFillSession {
   skippedManualCount: number;
 }
 
-function collectFormFields(snapshot: PageSnapshot): { fields: FormFieldDescriptor[]; manualCount: number } {
+function collectFormFields(snapshot: PageSnapshot): { fields: FormFieldDescriptor[]; manualFields: Array<{ id: number; label: string; reason: string }> } {
   const occurrenceByIdentity = new Map<string, number>();
-  let manualCount = 0;
+  const manualFields: Array<{ id: number; label: string; reason: string }> = [];
   const fields: FormFieldDescriptor[] = [];
   const radioGroups = new Map<string, { field: FormFieldDescriptor; labels: string[] }>();
   for (const element of snapshot.interactiveElements) {
     if (!["input", "textarea", "select"].includes(element.tag)) continue;
     const type = (element.type || "text").toLowerCase();
     if (element.tag === "input" && ["button", "submit", "reset", "hidden", "image"].includes(type)) continue;
-    if (element.tag === "input" && type === "file") { manualCount += 1; continue; }
+    if (element.tag === "input" && type === "file") {
+      manualFields.push({ id: element.id, label: element.label || "File upload", reason: "Choose this file yourself" });
+      continue;
+    }
     if (element.isSensitive) {
-      manualCount += 1;
+      manualFields.push({ id: element.id, label: element.label || element.placeholder || element.name || "Sensitive field", reason: "Fill manually for your security" });
       continue;
     }
 
@@ -132,7 +135,7 @@ function collectFormFields(snapshot: PageSnapshot): { fields: FormFieldDescripto
     const kind = element.tag === "select" ? "select" : type === "checkbox" ? "checkbox" : "text";
     fields.push({ fingerprint: `${identity}#${occurrence}`, identity, occurrence, label, tag: element.tag, type: element.type, kind, name: element.name, options: kind === "select" ? element.options || [] : undefined });
   }
-  return { fields, manualCount };
+  return { fields, manualFields };
 }
 
 function findFormField(snapshot: PageSnapshot, descriptor: FormFieldDescriptor, answer?: string) {
@@ -219,6 +222,8 @@ function buildFormFieldQuestion(field: FormFieldDescriptor): string {
 }
 
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+const HUGGINGFACE_ENDPOINT = "https://router.huggingface.co/v1";
+const DEFAULT_HUGGINGFACE_MODEL = "openai/gpt-oss-20b:deepinfra";
 const RETIRED_GEMINI_MODELS = new Set([
   "gemini-2.0-flash",
   "gemini-1.5-flash",
@@ -229,7 +234,7 @@ const DEFAULT_SETTINGS: SettingsState = {
   gnaniApiKey: (import.meta.env.VITE_GNANI_API_KEY as string) || "",
   languageCode: (import.meta.env.VITE_LANGUAGE_CODE as string) || "en-IN",
   llmProvider:
-    (import.meta.env.VITE_LLM_PROVIDER as "mock" | "openai-compatible" | "gemini") ||
+    (import.meta.env.VITE_LLM_PROVIDER as "mock" | "openai-compatible" | "huggingface" | "gemini") ||
     (import.meta.env.VITE_GEMINI_API_KEY
       ? "gemini"
       : import.meta.env.VITE_LLM_API_KEY
@@ -240,8 +245,11 @@ const DEFAULT_SETTINGS: SettingsState = {
     (import.meta.env.VITE_GEMINI_API_KEY as string) ||
     (import.meta.env.VITE_LLM_API_KEY as string) ||
     "",
-  llmEndpoint: (import.meta.env.VITE_LLM_ENDPOINT as string) || "https://api.openai.com/v1",
-  llmModel: (import.meta.env.VITE_LLM_MODEL as string) || DEFAULT_GEMINI_MODEL,
+  llmEndpoint: (import.meta.env.VITE_LLM_PROVIDER === "huggingface"
+    ? HUGGINGFACE_ENDPOINT
+    : (import.meta.env.VITE_LLM_ENDPOINT as string) || "https://api.openai.com/v1"),
+  llmModel: (import.meta.env.VITE_LLM_MODEL as string) ||
+    (import.meta.env.VITE_LLM_PROVIDER === "huggingface" ? DEFAULT_HUGGINGFACE_MODEL : DEFAULT_GEMINI_MODEL),
   siteChatEndpoint: (import.meta.env.VITE_SITE_CHAT_ENDPOINT as string) || "",
   siteChatApiKey: (import.meta.env.VITE_SITE_CHAT_API_KEY as string) || "",
   siteChatMaxPages: Number(import.meta.env.VITE_SITE_CHAT_MAX_PAGES || 25),
@@ -1188,7 +1196,10 @@ export const App: React.FC = () => {
     let currentSnapshot = await fetchPageSnapshot(activeTabId);
     const formFillIntent = /\b(fill|complete|populate|enter details|register|sign up|apply for|bhar(?:o|na|do|de))\b|फॉर्म|फ़ॉर्म|भर(?:ो|ना|ें)/i.test(taskGoal);
     if (!formFillRef.current && formFillIntent) {
-      const { fields, manualCount } = collectFormFields(currentSnapshot);
+      const { fields, manualFields } = collectFormFields(currentSnapshot);
+      if (manualFields.length > 0) {
+        await sendTabMessage(activeTabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: manualFields });
+      }
       if (fields.length > 0) {
         formFillRef.current = {
           tabId: activeTabId,
@@ -1196,9 +1207,9 @@ export const App: React.FC = () => {
           fields,
           index: 0,
           completed: new Set(),
-          skippedManualCount: manualCount,
+          skippedManualCount: manualFields.length,
         };
-        if (manualCount > 0) {
+        if (manualFields.length > 0) {
           await speakStatus("I will leave sensitive and file fields for you to handle manually. I will ask about every other visible field one at a time.");
         }
         await askNextFormField();
@@ -1664,6 +1675,28 @@ export const App: React.FC = () => {
         </div>
       </header>
 
+      {/* Keep consequential action confirmations visible outside the scroll area. */}
+      {pendingConfirmationAction && (
+        <div className="confirmation-box" role="alert">
+          <div className="confirmation-header">
+            <span className="alert-mark" aria-hidden="true">!</span>
+            <span>{translate("Confirmation required", "पुष्टि आवश्यक है")}</span>
+          </div>
+          <p className="confirmation-text">{confirmationMessage}</p>
+          <div className="confirmation-actions">
+            <button className="btn-confirm-yes" onClick={() => void processVoiceTurn("yes")}>
+              ✓ {translate("Confirm", "पुष्टि करें")}
+            </button>
+            <button
+              className="btn-confirm-no"
+              onClick={() => void processVoiceTurn("no")}
+            >
+              ✕ {translate("Cancel", "रद्द करें")}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Main Body */}
       <div className="panel-body">
         {/* Status Card */}
@@ -1683,28 +1716,6 @@ export const App: React.FC = () => {
           <div className="restricted-banner" role="status">
             <span className="restricted-icon" aria-hidden="true">!</span>
             <div><strong>{translate("Restricted page", "प्रतिबंधित पेज")}</strong><span className="restricted-copy">{translate("Chrome blocks extensions here. You can still say", "Chrome यहां extensions को block करता है। आप कह सकते हैं")} <em>“open YouTube”</em> {translate("or", "या")} <em>“open LeetCode”</em> {translate("to navigate away.", "दूसरे पेज पर जाने के लिए।")}</span></div>
-          </div>
-        )}
-
-        {/* Safety Confirmation Alert Box */}
-        {pendingConfirmationAction && (
-          <div className="confirmation-box">
-            <div className="confirmation-header">
-              <span className="alert-mark" aria-hidden="true">!</span>
-              <span>{translate("Confirmation required", "पुष्टि आवश्यक है")}</span>
-            </div>
-            <p className="confirmation-text">{confirmationMessage}</p>
-            <div className="confirmation-actions">
-              <button className="btn-confirm-yes" onClick={() => void processVoiceTurn("yes")}>
-                ✓ {translate("Confirm", "पुष्टि करें")}
-              </button>
-              <button
-                className="btn-confirm-no"
-                onClick={() => void processVoiceTurn("no")}
-              >
-                ✕ {translate("Cancel", "रद्द करें")}
-              </button>
-            </div>
           </div>
         )}
 
@@ -1997,12 +2008,16 @@ export const App: React.FC = () => {
                 onChange={(e) =>
                   setSettings({
                     ...settings,
-                    llmProvider: e.target.value as "mock" | "openai-compatible" | "gemini",
+                    llmProvider: e.target.value as "mock" | "openai-compatible" | "huggingface" | "gemini",
+                    ...(e.target.value === "huggingface"
+                      ? { llmEndpoint: HUGGINGFACE_ENDPOINT, llmModel: DEFAULT_HUGGINGFACE_MODEL }
+                      : {}),
                   })
                 }
               >
                 <option value="mock">{translate("Rule-Based Mock Planner (Offline Demo)", "रूल-बेस्ड मॉक प्लानर (ऑफलाइन डेमो)")}</option>
                 <option value="gemini">Google Gemini (AI Studio)</option>
+                <option value="huggingface">Hugging Face Inference Providers</option>
                 <option value="openai-compatible">OpenAI-Compatible LLM</option>
               </select>
             </div>
@@ -2073,6 +2088,41 @@ export const App: React.FC = () => {
                     value={settings.llmModel}
                     onChange={(e) => setSettings({ ...settings, llmModel: e.target.value })}
                   />
+                </div>
+              </>
+            )}
+
+            {settings.llmProvider === "huggingface" && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">Hugging Face token</label>
+                  <input
+                    type="password"
+                    className="form-input"
+                    placeholder="hf_..."
+                    value={settings.llmApiKey}
+                    onChange={(e) => setSettings({ ...settings, llmApiKey: e.target.value })}
+                  />
+                  <span className="form-help">
+                    Create a token with Inference Providers access at{" "}
+                    <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">
+                      Hugging Face settings
+                    </a>
+                    . It is saved in chrome.storage.local.
+                  </span>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Hugging Face model</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="organization/model:provider"
+                    value={settings.llmModel}
+                    onChange={(e) => setSettings({ ...settings, llmModel: e.target.value })}
+                  />
+                  <span className="form-help">
+                    Default uses openai/gpt-oss-20b on DeepInfra. Inference usage may require HF credits.
+                  </span>
                 </div>
               </>
             )}

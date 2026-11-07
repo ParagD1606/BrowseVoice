@@ -7,12 +7,67 @@
  * - Safe action execution
  */
 
-import { capturePageSnapshot } from "./observer";
+import { capturePageSnapshot, getElementById } from "./observer";
 import { executeAction } from "./executor";
 import type { PlannerAction } from "../lib/schema";
 
 let indicatorElement: HTMLElement | null = null;
 let agentActive = false;
+let manualFieldsOverlay: HTMLDivElement | null = null;
+let manualFieldsUpdate: (() => void) | null = null;
+
+function clearManualFieldHighlights(): void {
+  if (manualFieldsUpdate) {
+    window.removeEventListener("scroll", manualFieldsUpdate, true);
+    window.removeEventListener("resize", manualFieldsUpdate);
+  }
+  manualFieldsUpdate = null;
+  manualFieldsOverlay?.remove();
+  manualFieldsOverlay = null;
+}
+
+function highlightManualFields(fields: Array<{ id: number; label?: string; reason?: string }>): number {
+  clearManualFieldHighlights();
+  const targets = fields.flatMap((field) => {
+    const element = getElementById(field.id);
+    if (!element) return [];
+    return [{ element, label: field.label?.trim() || "Field", reason: field.reason?.trim() || "Fill manually" }];
+  });
+  if (!targets.length) return 0;
+
+  const overlay = document.createElement("div");
+  overlay.id = "browse-voice-manual-fields";
+  overlay.style.cssText = "position:fixed;inset:0;z-index:2147483645;pointer-events:none;";
+  const entries = targets.map(({ element, label, reason }) => {
+    const box = document.createElement("div");
+    box.style.cssText = "position:fixed;box-sizing:border-box;border:3px solid #f59e0b;border-radius:7px;background:rgba(245,158,11,.10);box-shadow:0 0 0 2px rgba(255,255,255,.9),0 3px 14px rgba(0,0,0,.25);pointer-events:none;";
+    const badge = document.createElement("div");
+    badge.textContent = `✋ Fill manually · ${label} · ${reason}`;
+    badge.style.cssText = "position:absolute;left:0;bottom:calc(100% + 5px);max-width:min(340px,80vw);padding:6px 9px;border-radius:6px;background:#7c2d12;color:white;font:600 12px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 2px 9px rgba(0,0,0,.35);white-space:normal;overflow-wrap:anywhere;";
+    box.appendChild(badge);
+    overlay.appendChild(box);
+    return { element, box };
+  });
+  document.documentElement.appendChild(overlay);
+
+  const update = () => {
+    for (const { element, box } of entries) {
+      if (!element.isConnected) { box.style.display = "none"; continue; }
+      const rect = element.getBoundingClientRect();
+      box.style.display = rect.width > 0 && rect.height > 0 ? "block" : "none";
+      box.style.left = `${rect.left}px`;
+      box.style.top = `${rect.top}px`;
+      box.style.width = `${rect.width}px`;
+      box.style.height = `${rect.height}px`;
+    }
+  };
+  manualFieldsOverlay = overlay;
+  manualFieldsUpdate = update;
+  window.addEventListener("scroll", update, true);
+  window.addEventListener("resize", update);
+  update();
+  return targets.length;
+}
 
 interface SnipSelectionResult {
   rect: { x: number; y: number; width: number; height: number };
@@ -161,6 +216,7 @@ function showActiveIndicator(statusText: string = "Active"): void {
  */
 function hideActiveIndicator(): void {
   agentActive = false;
+  clearManualFieldHighlights();
   if (indicatorElement) {
     indicatorElement.remove();
     indicatorElement = null;
@@ -186,6 +242,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case "BV_DEACTIVATE_AGENT": {
       hideActiveIndicator();
       sendResponse({ ok: true });
+      return true;
+    }
+
+    case "BV_HIGHLIGHT_MANUAL_FIELDS": {
+      const fields = Array.isArray(message.fields) ? message.fields : [];
+      const safeFields = fields.filter((field: unknown) =>
+        !!field && typeof field === "object" && Number.isInteger((field as { id?: unknown }).id),
+      ) as Array<{ id: number; label?: string; reason?: string }>;
+      const count = highlightManualFields(safeFields);
+      sendResponse({ ok: true, highlighted: count });
       return true;
     }
 

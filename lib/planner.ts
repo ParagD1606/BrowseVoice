@@ -37,8 +37,46 @@ export interface PlannerProvider {
   plan(request: PlannerRequest): Promise<PlannerAction>;
 }
 
+const HUGGINGFACE_ROUTER = "https://router.huggingface.co/v1";
+
+async function plannerApiError(provider: string, response: Response): Promise<Error> {
+  const responseText = await response.text();
+  let detail = responseText;
+  try {
+    const payload = JSON.parse(responseText);
+    detail = payload?.error?.message || payload?.message || responseText;
+  } catch {
+    // Keep the provider's plain-text error when the response is not JSON.
+  }
+
+  detail = detail.trim().slice(0, 700);
+  if (response.status === 429) {
+    const retryAfter = response.headers.get("Retry-After");
+    const providerRetryAfter = /try again in\s+([\d.]+)\s*(seconds?|secs?|s)\b/i.exec(detail)?.[1];
+    const retryHint = retryAfter
+      ? ` Retry after ${retryAfter} seconds.`
+      : providerRetryAfter
+        ? ` Retry in about ${providerRetryAfter} seconds.`
+        : " Wait a little, then retry, or check your provider's quota and rate limits.";
+    return new Error(`${provider} rate limit reached.${retryHint}${detail ? ` Provider message: ${detail}` : ""}`);
+  }
+
+  return new Error(`${provider} API returned ${response.status}: ${detail || response.statusText}`);
+}
+
+async function isJsonValidationFailure(response: Response): Promise<boolean> {
+  if (response.status !== 400) return false;
+  try {
+    const payload = await response.clone().json();
+    return payload?.error?.code === "json_validate_failed" ||
+      /failed to validate json/i.test(payload?.error?.message || "");
+  } catch {
+    return false;
+  }
+}
+
 export interface LLMConfig {
-  provider: "openai-compatible" | "gemini" | "mock";
+  provider: "openai-compatible" | "huggingface" | "gemini" | "mock";
   endpoint?: string; // e.g. https://api.openai.com/v1 or https://openrouter.ai/api/v1
   apiKey?: string;
   model?: string; // e.g. gemini-3.8-flash, gpt-4o-mini, deepseek-chat
@@ -79,7 +117,7 @@ export async function convertFormAnswerToEnglish(
     return converted;
   }
 
-  const endpoint = (config.endpoint || "https://api.openai.com/v1").replace(/\/$/, "");
+  const endpoint = (config.provider === "huggingface" ? HUGGINGFACE_ROUTER : config.endpoint || "https://api.openai.com/v1").replace(/\/$/, "");
   const response = await fetch(`${endpoint}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
@@ -157,8 +195,8 @@ export async function answerAboutSnips(config: LLMConfig, question: string, snip
     return { text, provider: `Gemini (${model})` };
   }
 
-  if (config.provider === "openai-compatible" && config.apiKey) {
-    const endpoint = (config.endpoint || "https://api.openai.com/v1").replace(/\/$/, "");
+  if ((config.provider === "openai-compatible" || config.provider === "huggingface") && config.apiKey) {
+    const endpoint = (config.provider === "huggingface" ? HUGGINGFACE_ROUTER : config.endpoint || "https://api.openai.com/v1").replace(/\/$/, "");
     const content: Array<Record<string, unknown>> = [{ type: "text", text: buildSnipContextText(question, snips) }];
     for (const snip of snips.slice(-4)) {
       content.push({ type: "image_url", image_url: { url: snip.imageDataUrl, detail: "high" } });
@@ -235,7 +273,7 @@ RULES:
    - {"action": "ask_user", "question": "<question in user's language>", "options": ["opt1", "opt2"], "rationale": "<short rationale>"}
    - {"action": "done", "summary": "<concise summary of completed work>"}
 
-2. Use ONLY element IDs listed in the snapshot's interactiveElements. Never invent IDs.
+2. Use ONLY element IDs listed in the snapshot's controls. Never invent IDs.
 3. NEVER type into sensitive fields (passwords, OTPs, CVVs, Aadhaar). If a sensitive field is required, ask the user to fill it manually using ask_user.
 4. Keep the rationale short (1 short sentence) in Hindi or Hinglish so it can be spoken via Text-to-Speech.
 5. If the user's goal is accomplished on the current screen, return action "done".
@@ -265,7 +303,10 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
       throw new Error("LLM API Key is missing. Please set it in Browse Voice Settings.");
     }
 
-    const sendPrompt = (prompt: string) => fetch(`${this.endpoint}/chat/completions`, {
+    const isGroqGptOss = new URL(this.endpoint).hostname === "api.groq.com" &&
+      /^openai\/gpt-oss-(?:20b|120b)(?::|$)/i.test(this.model);
+    const maxTokens = isGroqGptOss ? 512 : 192;
+    const sendPrompt = (prompt: string, jsonMode = true) => fetch(`${this.endpoint}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -278,23 +319,30 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
           { role: "user", content: prompt },
         ],
         temperature: 0.1,
-        // Planner responses are short JSON actions. Avoid reserving the provider's
-        // default completion budget against a limited per-minute token allowance.
-        max_tokens: 512,
-        response_format: { type: "json_object" },
+        // Keep ordinary actions inexpensive, while allowing reasoning models
+        // enough room to finish both their reasoning and the JSON action.
+        max_tokens: maxTokens,
+        ...(isGroqGptOss ? { reasoning_effort: "low" } : {}),
+        ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       }),
     });
 
-    let response = await sendPrompt(buildPlannerPrompt(request));
+    let prompt = buildPlannerPrompt(request);
+    let response = await sendPrompt(prompt);
     if (response.status === 413) {
       // Retry once with a smaller page slice if the provider rejected the first
       // request for size/TPM. Element IDs still refer to the same fresh snapshot.
-      response = await sendPrompt(buildPlannerPrompt(request, { maxElements: 8, maxSummaryLength: 80 }));
+      prompt = buildPlannerPrompt(request, { maxElements: 8, maxSummaryLength: 80 });
+      response = await sendPrompt(prompt);
+    }
+    if (await isJsonValidationFailure(response)) {
+      // Some reasoning model generations fail inside provider JSON mode. Retry
+      // once as plain text, then validate the returned JSON locally before acting.
+      response = await sendPrompt(prompt, false);
     }
 
     if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`LLM API returned ${response.status}: ${errText}`);
+      throw await plannerApiError("LLM", response);
     }
 
     const data = await response.json();
@@ -322,7 +370,9 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
       },
     ];
 
-    const response = await fetch(`${this.endpoint}/chat/completions`, {
+    const isGroqGptOss = new URL(this.endpoint).hostname === "api.groq.com" &&
+      /^openai\/gpt-oss-(?:20b|120b)(?::|$)/i.test(this.model);
+    const sendCorrection = (jsonMode = true) => fetch(`${this.endpoint}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -332,10 +382,20 @@ export class OpenAICompatiblePlanner implements PlannerProvider {
         model: this.model,
         messages: correctionMessages,
         temperature: 0.0,
-        max_tokens: 512,
-        response_format: { type: "json_object" },
+        max_tokens: isGroqGptOss ? 512 : 192,
+        ...(isGroqGptOss ? { reasoning_effort: "low" } : {}),
+        ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
       }),
     });
+
+    let response = await sendCorrection();
+    if (await isJsonValidationFailure(response)) {
+      response = await sendCorrection(false);
+    }
+
+    if (!response.ok) {
+      throw await plannerApiError("LLM", response);
+    }
 
     const data = await response.json();
     const content = data?.choices?.[0]?.message?.content || "";
@@ -356,8 +416,8 @@ export function buildPlannerPrompt(
   request: PlannerRequest,
   limits: { maxElements?: number; maxSummaryLength?: number } = {},
 ): string {
-  const maxElements = limits.maxElements ?? 24;
-  const maxSummaryLength = limits.maxSummaryLength ?? 240;
+  const maxElements = limits.maxElements ?? 14;
+  const maxSummaryLength = limits.maxSummaryLength ?? 160;
   const words = request.userRequest.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) || [];
   const taskTerms = new Set(words.filter((word) => !["the", "and", "for", "from", "with", "play", "video", "please", "करो", "करना"].includes(word)));
   const allElements = request.snapshot.interactiveElements;
@@ -375,34 +435,36 @@ export function buildPlannerPrompt(
     .map(({ element: el }) => ({
       id: el.id,
       role: el.role.slice(0, 24),
-      label: el.label.slice(0, 90),
+      label: el.label.slice(0, 72),
       type: el.type,
-      value: (el.value || "").slice(0, 80),
-      isSensitive: el.isSensitive,
+      ...(el.value ? { value: el.value.slice(0, 40) } : {}),
+      ...(el.isSensitive ? { sensitive: true } : {}),
     }));
 
-  const recentHistory = (request.history || []).slice(-5).map((step) => ({
-    stepNumber: step.stepNumber,
+  const recentHistory = (request.history || []).slice(-3).map((step) => ({
     action: step.action.action,
     status: step.status,
-    rationale: step.action.rationale?.slice(0, 80),
+    ...(step.action.rationale ? { rationale: step.action.rationale.slice(0, 55) } : {}),
   }));
 
+  // The task itself is already included below; omit its duplicate from the
+  // conversation and retain only the latest short follow-up context.
+  const recentConversation = (request.conversation || [])
+    .filter((turn) => !(turn.role === "user" && turn.content.trim() === request.userRequest.trim()))
+    .slice(-2)
+    .map((turn) => ({ role: turn.role, content: turn.content.slice(0, 100) }));
+
   return JSON.stringify({
-    userRequest: request.userRequest.slice(0, 500),
-      recentConversation: (request.conversation || []).slice(-6).map((turn) => ({
-        role: turn.role,
-        content: turn.content.slice(0, 180),
-      })),
+    task: request.userRequest.slice(0, 300),
+    ...(recentConversation.length ? { conversation: recentConversation } : {}),
     pendingConfirmation: Boolean(request.pendingConfirmation),
     page: {
-      url: request.snapshot.url.slice(0, 300),
-      title: request.snapshot.title.slice(0, 160),
+      url: request.snapshot.url.slice(0, 180),
+      title: request.snapshot.title.slice(0, 100),
       summary: request.snapshot.summary.slice(0, maxSummaryLength),
-      interactiveElements: selectedElements,
-      omittedInteractiveElementCount: Math.max(0, allElements.length - selectedElements.length),
+      controls: selectedElements,
     },
-    last5Steps: recentHistory,
+    recentActions: recentHistory,
   });
 }
 
@@ -442,6 +504,7 @@ export class GeminiPlanner implements PlannerProvider {
       ],
       generationConfig: {
         responseMimeType: "application/json",
+        maxOutputTokens: 192,
       },
     };
 
@@ -454,8 +517,7 @@ export class GeminiPlanner implements PlannerProvider {
     });
 
     if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Gemini API returned ${response.status}: ${errText}`);
+      throw await plannerApiError("Gemini", response);
     }
 
     const data = await response.json();
@@ -483,9 +545,13 @@ export class GeminiPlanner implements PlannerProvider {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: PLANNER_SYSTEM_PROMPT }] },
         contents: [{ role: "user", parts: [{ text: correctionText }] }],
-        generationConfig: { responseMimeType: "application/json" },
+        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 192 },
       }),
     });
+
+    if (!response.ok) {
+      throw await plannerApiError("Gemini", response);
+    }
 
     const data = await response.json();
     const content = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
@@ -667,6 +733,9 @@ export function createPlanner(config: LLMConfig): PlannerProvider {
   }
   if (config.provider === "openai-compatible" && config.apiKey) {
     return new OpenAICompatiblePlanner(config);
+  }
+  if (config.provider === "huggingface" && config.apiKey) {
+    return new OpenAICompatiblePlanner({ ...config, endpoint: HUGGINGFACE_ROUTER });
   }
   return new MockRuleBasedPlanner();
 }
