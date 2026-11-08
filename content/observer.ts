@@ -17,6 +17,7 @@ import {
   type PageSnapshot,
 } from "../lib/safety";
 import { hasPaymentReceipt } from "../lib/payment-state";
+import { classifyUserOnlyField } from "../lib/user-only";
 
 // Store assigned DOM element references in a WeakMap / Map keyed by numeric ID
 const elementRegistry = new Map<number, HTMLElement>();
@@ -152,6 +153,7 @@ export function capturePageSnapshot(): PageSnapshot {
   const rawElements = collectInteractiveCandidates(document);
   const interactiveElements: InteractiveElement[] = [];
 
+  const pageContext = `${document.title} ${document.body?.innerText?.slice(0, 2500) || ""}`;
   for (const el of rawElements) {
     const id = nextId++;
     elementRegistry.set(id, el);
@@ -176,12 +178,16 @@ export function capturePageSnapshot(): PageSnapshot {
       autocomplete: el.getAttribute("autocomplete") || undefined,
     });
 
+    const description = [placeholder, el.getAttribute("aria-describedby") ? document.getElementById(el.getAttribute("aria-describedby")!)?.textContent : "", el.closest("fieldset")?.querySelector("legend")?.textContent, el.closest("section,[role=dialog],form")?.getAttribute("aria-label")].filter(Boolean).join(" · ").slice(0, 180);
+    const classification = classifyUserOnlyField({ id, tag, role, type, name, label, placeholder, autocomplete: el.getAttribute("autocomplete") || undefined, inputmode: el.getAttribute("inputmode") || undefined, maxlength: el instanceof HTMLInputElement ? el.maxLength : undefined, pattern: el instanceof HTMLInputElement ? el.pattern : undefined, description, options: el instanceof HTMLSelectElement ? Array.from(el.options).map((option) => option.text) : undefined, isSensitive: sensitivity.isSensitive }, `${pageContext} ${description}`);
+    const isUserOnly = sensitivity.isSensitive || classification.isUserOnly;
+
     // Extract value (and mask if sensitive)
     let rawValue: string | undefined;
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
       rawValue = el.value;
     }
-    const safeValue = maskSensitiveValue(rawValue, sensitivity.isSensitive);
+    const safeValue = maskSensitiveValue(rawValue, isUserOnly);
 
     interactiveElements.push({
       id,
@@ -197,8 +203,10 @@ export function capturePageSnapshot(): PageSnapshot {
         ? Array.from(el.options).map((option) => option.text.trim()).filter(Boolean).slice(0, 30)
         : undefined,
       selected: el instanceof HTMLSelectElement ? el.selectedOptions[0]?.text.trim() || undefined : undefined,
-      isSensitive: sensitivity.isSensitive,
-      sensitiveReason: sensitivity.reason,
+      isSensitive: isUserOnly,
+      sensitiveReason: sensitivity.reason || (classification.isUserOnly ? `User-only ${classification.category || "private"} field` : undefined),
+      description,
+      category: sensitivity.isSensitive ? "credential" : classification.category,
     });
   }
 

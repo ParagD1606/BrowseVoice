@@ -16,6 +16,7 @@
 
 import { isAllowedNavigationUrl, type PlannerAction } from "./schema.ts";
 import { hasVisiblePaymentForm } from "./payment-state.ts";
+import { classifyUserOnlyField, type UserOnlyCategory } from "./user-only.ts";
 
 export interface InteractiveElement {
   id: number;
@@ -29,6 +30,9 @@ export interface InteractiveElement {
   checked?: boolean;
   options?: string[];
   selected?: string;
+  description?: string;
+  category?: UserOnlyCategory;
+  groupIds?: number[];
   isSensitive: boolean;
   sensitiveReason?: string;
   selector?: string;
@@ -154,6 +158,7 @@ export function inspectActionSafety(
   requiresConfirmation: boolean;
   reason?: string;
   targetElement?: InteractiveElement;
+  handoff?: { fields: InteractiveElement[]; category: UserOnlyCategory };
   safetyAlertSpeech?: string;
 } {
   // Check action targeting an element
@@ -166,14 +171,33 @@ export function inspectActionSafety(
     };
   }
 
-  if (action.action === "type" || action.action === "click" || action.action === "select") {
-    const target = snapshot.interactiveElements.find((el) => el.id === action.id);
+  if (action.action === "type" || action.action === "click" || action.action === "select" || action.action === "press_key") {
+    const target = action.action === "press_key" ? undefined : snapshot.interactiveElements.find((el) => el.id === action.id);
+    if (action.action === "press_key") return { permitted: true, requiresConfirmation: false };
 
     if (!target) {
       return {
         permitted: false,
         requiresConfirmation: false,
         reason: `Element ID [${action.id}] does not exist in the current page snapshot.`,
+      };
+    }
+
+    const classification = classifyUserOnlyField(target, snapshot.summary);
+    if (classification.isUserOnly) {
+      const ids = new Set([target.id, ...(target.groupIds || [])]);
+      const fields = snapshot.interactiveElements.filter((element) => ids.has(element.id) || element.groupIds?.includes(target.id));
+      return {
+        permitted: false,
+        requiresConfirmation: false,
+        targetElement: target,
+        handoff: { fields, category: target.category || classification.category || "private" },
+        reason: target.isSensitive
+          ? `Safety Block: Cannot handle sensitive field (${target.sensitiveReason || "private information"}).`
+          : "User-only information must be provided directly by the user.",
+        safetyAlertSpeech: target.isSensitive
+          ? "This is a password, OTP, or sensitive field. For your security, please fill it manually."
+          : undefined,
       };
     }
 

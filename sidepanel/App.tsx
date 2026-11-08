@@ -1695,6 +1695,20 @@ export const App: React.FC = () => {
     await maybeSpeakCombinedSummary();
   };
 
+  const redactPrivateTranscript = (text: string) => text.replace(/\b\d{6,}\b/g, "[REDACTED]").replace(/\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/gi, "[REDACTED]").replace(/\b(?:\d[ -]*?){12,19}\b/g, "[REDACTED]");
+  const waitingUserContext = () => Array.from(taskContextsRef.current.values()).find((context) => context.guidance?.reason === "user_input_required" || context.guidance?.reason === "sensitive_field");
+  const continuePhrase = (text: string) => /^(?:done|ho\s*gaya|ho\s*gya|kar\s*diya|bhar\s*diya|continue|aage\s*badho|ok\s*done|हो\s*गया|आगे\s*बढ़ो)$/i.test(text.trim());
+  const handleWaitingUserReply = async (text: string) => {
+    const context = waitingUserContext();
+    if (!context) return false;
+    if (continuePhrase(text)) {
+      await resumeAgentTask(context, true, text);
+    } else {
+      await speakStatus(translate("Please type it yourself; do not say it aloud.", "कृपया इसे स्वयं टाइप करें, ज़ोर से न बोलें।"));
+    }
+    return true;
+  };
+
   const startVoiceListening = async () => {
     if (!voiceSessionActiveRef.current || micSessionRef.current.isActive()) return;
     const generation = ++voiceListenGenerationRef.current;
@@ -1772,7 +1786,9 @@ export const App: React.FC = () => {
         handleEmergencyStop();
         return;
       }
-      if (activeQuestionTaskId) {
+      if (await handleWaitingUserReply(text)) {
+        setTranscript(redactPrivateTranscript(text));
+      } else if (activeQuestionTaskId) {
         await answerTask(text);
       } else if (activeConfirmationTaskId) {
         if (isConfirmationCommand(text)) {
@@ -1827,10 +1843,15 @@ export const App: React.FC = () => {
     if (!currentPrompt.trim()) return;
     const prompt = currentPrompt.trim();
     setCurrentPrompt("");
-    setTranscript(prompt);
+    setTranscript(redactPrivateTranscript(prompt));
 
     if (isStopCommand(prompt)) {
       handleEmergencyStop();
+      return;
+    }
+
+    if (waitingUserContext()) {
+      void handleWaitingUserReply(prompt);
       return;
     }
 

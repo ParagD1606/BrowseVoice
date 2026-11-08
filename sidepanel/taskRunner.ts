@@ -8,6 +8,7 @@ import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "../li
 import { inspectActionSafety, type PageSnapshot } from "../lib/safety.ts";
 import { validatePlannerAction, type PlannerAction } from "../lib/schema.ts";
 import { buildGuidance, type Guidance, type GuidanceReason } from "../lib/guidance.ts";
+import { classifyUserOnlyField } from "../lib/user-only.ts";
 
 export type TaskRunnerStatus =
   | "queued"
@@ -214,6 +215,7 @@ function isContinueCommand(text: string): boolean {
 }
 
 function describeAction(action: PlannerAction): string {
+  if (action.action === "handoff_to_user") return "hand off private fields to the user";
   if (action.action === "click") return `click ${action.id}`;
   if (action.action === "type") return `type into ${action.id}`;
   if (action.action === "select") return `select ${action.value}`;
@@ -342,17 +344,27 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
     }
 
     const safety = inspectActionSafety(action, currentSnapshot);
+    if (action.action === "handoff_to_user") {
+      const chosen = currentSnapshot.interactiveElements.filter((element) => action.ids.includes(element.id));
+      const ids = new Set(chosen.flatMap((element) => [element.id, ...(element.groupIds || [])]));
+      const fields = currentSnapshot.interactiveElements.filter((element) => ids.has(element.id) || element.groupIds?.some((id) => ids.has(id)));
+      await context.sendTabMessage(context.tabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: fields.map((field) => ({ id: field.id, label: field.label, reason: action.kind, category: field.category || action.kind })) }).catch(() => undefined);
+      context.pendingQuestion = null;
+      context.pendingQuestionOptions = [];
+      return await pauseWithGuidance(context, "user_input_required", { error: action.explanation, fields: fields.map((field) => ({ label: field.label, category: field.category || action.kind, description: field.description })), sectionTitle: currentSnapshot.title }, "waiting_user");
+    }
     if (!safety.permitted) {
       const message = safety.safetyAlertSpeech || "This field contains sensitive information. Please fill it manually.";
       appendStep(context, { stepNumber, action, status: "blocked", spokenSummary: message, details: safety.reason, timestamp: Date.now() });
-      if (action.action === "type" && safety.targetElement?.isSensitive) {
+      if (safety.handoff) {
+        const fields = safety.handoff.fields;
         await context.sendTabMessage(context.tabId, {
           type: "BV_HIGHLIGHT_MANUAL_FIELDS",
-          fields: [{ id: safety.targetElement.id, label: safety.targetElement.label, reason: safety.targetElement.sensitiveReason || "sensitive information" }],
+          fields: fields.map((field) => ({ id: field.id, label: field.label, reason: field.description || safety.handoff!.category, category: field.category || safety.handoff!.category })),
         }).catch(() => undefined);
-        return await pauseWithGuidance(context, "sensitive_field", {
-          fieldLabel: safety.targetElement.label,
-          fieldReason: safety.targetElement.sensitiveReason || "sensitive information",
+        return await pauseWithGuidance(context, "user_input_required", {
+          fields: fields.map((field) => ({ label: field.label, category: field.category || safety.handoff!.category, description: field.description })),
+          sectionTitle: currentSnapshot.title,
         }, "waiting_user");
       }
       const reason: GuidanceReason = /navigation/i.test(safety.reason || "") ? "navigation_blocked" : "action_failed";
@@ -376,6 +388,15 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
     }
 
     if (action.action === "ask_user") {
+      const askingPrivate = classifyUserOnlyField({ label: action.question }, `${action.question} ${(action.options || []).join(" ")}`).isUserOnly || (action.options || []).some((option) => classifyUserOnlyField({ label: option }, currentSnapshot.summary).isUserOnly);
+      if (askingPrivate) {
+        const privateFields = currentSnapshot.interactiveElements.filter((element) => classifyUserOnlyField(element, currentSnapshot.summary).isUserOnly);
+        if (privateFields.length) {
+          await context.sendTabMessage(context.tabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: privateFields.map((field) => ({ id: field.id, label: field.label, reason: field.description || field.category || "private information", category: field.category || "private" })) }).catch(() => undefined);
+          return await pauseWithGuidance(context, "user_input_required", { fields: privateFields.map((field) => ({ label: field.label, category: field.category || "private", description: field.description })), sectionTitle: currentSnapshot.title }, "waiting_user");
+        }
+        return await pauseWithGuidance(context, "user_input_required", { error: "Please complete this private step directly on the page.", sectionTitle: currentSnapshot.title }, "waiting_user");
+      }
       context.pendingQuestion = action.question;
       context.pendingQuestionOptions = action.options || [];
       context.conversation = [...context.conversation, { role: "assistant" as const, content: action.question }].slice(-6);
@@ -548,6 +569,7 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
     context.pendingQuestion = null;
     context.pendingQuestionOptions = [];
     context.conversation = [...context.conversation, { role: "user" as const, content: answer.trim() }].slice(-6);
+    await context.sendTabMessage(context.tabId, { type: "BV_CLEAR_MANUAL_FIELDS" }).catch(() => undefined);
     emitStatus(context, "running", "Continuing task");
     try { return await runLoop(context); } catch (error) {
       const message = error instanceof Error ? error.message : "Task failed.";
@@ -563,10 +585,11 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
       if (context.maxSteps >= context.hardMaxSteps) return { status: "paused", context };
       if (!confirmed && !isContinueCommand(hint) && hint.toLowerCase() !== "continue") return { status: "paused", context };
       context.maxSteps = Math.min(context.hardMaxSteps, context.maxSteps + 15);
-    } else if (context.guidance.reason === "sensitive_field" && !isContinueCommand(hint)) {
+    } else if ((context.guidance.reason === "sensitive_field" || context.guidance.reason === "user_input_required") && !isContinueCommand(hint)) {
       return { status: "waiting_user", context };
     }
-    context.conversation = [...context.conversation, { role: "user" as const, content: hint }].slice(-6);
+    if (context.guidance.reason !== "user_input_required" && context.guidance.reason !== "sensitive_field") context.conversation = [...context.conversation, { role: "user" as const, content: hint }].slice(-6);
+    await context.sendTabMessage(context.tabId, { type: "BV_CLEAR_MANUAL_FIELDS" }).catch(() => undefined);
     context.guidance = null;
     context.unchangedFingerprintCount = 0;
     context.staleElementRetries = 0;

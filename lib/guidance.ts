@@ -1,5 +1,6 @@
 export type GuidanceReason =
   | "sensitive_field"
+  | "user_input_required"
   | "question"
   | "max_steps"
   | "repeated_action"
@@ -48,6 +49,8 @@ export interface GuidanceContext {
   completed?: string;
   remaining?: string;
   tabId?: number;
+  fields?: Array<{ label: string; category?: string; description?: string }>;
+  sectionTitle?: string;
 }
 
 function copy(context: GuidanceContext, english: string, hindi: string): string {
@@ -67,6 +70,18 @@ export function buildGuidance(reason: GuidanceReason, context: GuidanceContext =
   const commonRetry = [action(context, "Retry", "फिर कोशिश करें", "retry")];
 
   switch (reason) {
+    case "user_input_required": {
+      const fields = context.fields || [];
+      const names = fields.map((field) => field.label).filter(Boolean).join(", ") || context.sectionTitle || "these private details";
+      const details = fields.map((field) => field.description).filter(Boolean).join("; ");
+      return {
+        reason,
+        title: title("This is a private step", "यह निजी जानकारी का चरण है"),
+        whatHappened: line(`Please fill ${names} yourself${details ? ` (${details})` : ""}. I will not ask for it, type it, or read it.`, `कृपया ${names} स्वयं भरें${details ? ` (${details})` : ""}। मैं इसे नहीं पूछूँगा, टाइप करूँगा या पढ़ूँगा।`),
+        whatToDo: [line("When you are done, say 'done' or tap Continue.", "भरने के बाद 'done' कहें या Continue दबाएँ।")],
+        actions: [action(context, "Continue", "जारी रखें", "resume")],
+      };
+    }
     case "sensitive_field": {
       const field = context.fieldLabel || "the sensitive field";
       return {

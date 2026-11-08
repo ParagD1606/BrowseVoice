@@ -284,15 +284,16 @@ test("Command 10: 'ha payment confirm karo' (Hindi/Hinglish Confirmation) -> con
   assert.equal(safety.requiresConfirmation, true, "Consequential payment action MUST require confirmation");
 });
 
-test("Payment form is not reported complete and asks the user to handle sensitive details", async () => {
+test("Payment form hands sensitive details to the user and is not reported complete", async () => {
   const action = await planner.plan({
     userRequest: "bill bharo",
     snapshot: MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT,
     history: [],
   });
 
-  assert.equal(action.action, "ask_user");
-  assert.match(action.question, /स्वयं भरें/);
+  assert.equal(action.action, "handoff_to_user");
+  assert.deepEqual(action.ids, [8, 9]);
+  assert.match(action.explanation, /enter private payment details yourself/i);
   assert.equal(hasPaymentReceipt(MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT.summary), false);
 });
 

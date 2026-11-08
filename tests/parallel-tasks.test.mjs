@@ -210,7 +210,7 @@ test("ask_user is exposed as a question, not a confirmation", async () => {
 });
 
 test("every guidance reason has short English and Hindi guidance", async () => {
-  const reasons = ["sensitive_field", "question", "max_steps", "repeated_action", "no_progress", "stale_element", "action_failed", "navigation_blocked", "restricted_page", "no_api_key", "invalid_api_key", "rate_limited", "network_error", "planner_error", "mic_denied", "tab_closed", "load_timeout", "payment_incomplete", "stopped"];
+  const reasons = ["sensitive_field", "user_input_required", "question", "max_steps", "repeated_action", "no_progress", "stale_element", "action_failed", "navigation_blocked", "restricted_page", "no_api_key", "invalid_api_key", "rate_limited", "network_error", "planner_error", "mic_denied", "tab_closed", "load_timeout", "payment_incomplete", "stopped"];
   for (const reason of reasons) {
     const english = buildGuidance(reason, { taskLabel: "Test task", error: "Test error", tried: ["click Search"] });
     const hindi = buildGuidance(reason, { languageCode: "hi-IN", taskLabel: "Test task", error: "Test error", tried: ["click Search"] });

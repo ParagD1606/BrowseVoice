@@ -26,12 +26,13 @@ function clearManualFieldHighlights(): void {
   manualFieldsOverlay = null;
 }
 
-function highlightManualFields(fields: Array<{ id: number; label?: string; reason?: string }>): number {
+function highlightManualFields(fields: Array<{ id: number; label?: string; reason?: string; category?: string }>): number {
   clearManualFieldHighlights();
   const targets = fields.flatMap((field) => {
     const element = getElementById(field.id);
     if (!element) return [];
-    return [{ element, label: field.label?.trim() || "Field", reason: field.reason?.trim() || "Fill manually" }];
+    const container = element.closest("fieldset,[role=group],section,[role=dialog]") as HTMLElement | null;
+    return [{ element: container || element, label: field.label?.trim() || "Field", reason: field.reason?.trim() || field.category?.trim() || "Fill this yourself" }];
   });
   if (!targets.length) return 0;
 
@@ -66,6 +67,7 @@ function highlightManualFields(fields: Array<{ id: number; label?: string; reaso
   window.addEventListener("scroll", update, true);
   window.addEventListener("resize", update);
   update();
+  targets[0]?.element.scrollIntoView({ behavior: "smooth", block: "center" });
   return targets.length;
 }
 
@@ -249,9 +251,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const fields = Array.isArray(message.fields) ? message.fields : [];
       const safeFields = fields.filter((field: unknown) =>
         !!field && typeof field === "object" && Number.isInteger((field as { id?: unknown }).id),
-      ) as Array<{ id: number; label?: string; reason?: string }>;
+      ) as Array<{ id: number; label?: string; reason?: string; category?: string }>;
       const count = highlightManualFields(safeFields);
       sendResponse({ ok: true, highlighted: count });
+      return true;
+    }
+
+    case "BV_CLEAR_MANUAL_FIELDS": {
+      clearManualFieldHighlights();
+      sendResponse({ ok: true });
       return true;
     }
 

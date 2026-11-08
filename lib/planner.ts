@@ -546,13 +546,14 @@ RULES:
    - {"action": "type", "id": <number>, "text": "<value>", "rationale": "<short rationale>"}
    - {"action": "select", "id": <number>, "value": "<option>", "rationale": "<short rationale>"}
    - {"action": "press_key", "key": "Enter"|"Tab"|"Escape", "rationale": "<short rationale>"}
+   - {"action": "handoff_to_user", "ids": [<element ids>], "kind": "<short category>", "explanation": "<one plain sentence in the user's language>"}
    - {"action": "scroll", "direction": "up"|"down"|"left"|"right", "amount": 300, "rationale": "<short rationale>"}
    - {"action": "navigate", "url": "<valid url>", "rationale": "<short rationale>"}
    - {"action": "ask_user", "question": "<question in user's language>", "options": ["opt1", "opt2"], "rationale": "<short rationale>"}
    - {"action": "done", "summary": "<concise summary of completed work>"}
 
 2. Use ONLY element IDs listed in the snapshot's controls. Never invent IDs.
-3. NEVER type into sensitive fields (passwords, OTPs, CVVs, Aadhaar). If a sensitive field is required, ask the user to fill it manually using ask_user.
+3. Never use ask_user for payment details, payment method, credentials, OTPs, or IDs. When the next step needs the user to enter or choose any of these, return handoff_to_user with the element ids and a clear explanation. Never read or guess values. Only ask_user for non-private preferences.
 4. Use the response language specified in the request for every user-facing string: rationale, ask_user question, and done summary. Keep it short and natural for speech. Do not default to Hindi or English when another language is selected.
 5. If the user's goal is accomplished on the current screen, return action "done".
    For payment tasks, NEVER claim payment is complete unless the currently visible page shows a successful payment receipt with a transaction ID. A payment form or a "continue to payment" page is not completion.
@@ -914,10 +915,13 @@ export class MockRuleBasedPlanner implements PlannerProvider {
       /\bpay\b|भुगतान/i.test(el.label),
     );
     if (isPaymentIntent(req) && hasVisiblePaymentForm(request.snapshot) && paySubmitButton) {
+      const privateIds = elements.filter((element) => element.isSensitive || element.category === "payment_method_choice").map((element) => element.id);
       return {
-        action: "ask_user",
-        question: "भुगतान फ़ॉर्म खुला है। कार्ड, UPI या अन्य गोपनीय जानकारी आप स्वयं भरें। राशि जाँचने के बाद, अगर भुगतान करना चाहते हैं, तो कहें ‘भुगतान की पुष्टि करें’।",
-        rationale: "गोपनीय भुगतान जानकारी आपको स्वयं भरनी होगी।",
+        action: "handoff_to_user",
+        ids: privateIds.length ? privateIds : elements.filter((element) => element.isSensitive).map((element) => element.id),
+        kind: "payment details",
+        explanation: "Please enter private payment details yourself, then tell me when done.",
+        rationale: "Private financial details stay with the user.",
       };
     }
 

@@ -17,6 +17,7 @@ export type ActionType =
   | "type"
   | "select"
   | "press_key"
+  | "handoff_to_user"
   | "scroll"
   | "navigate"
   | "ask_user"
@@ -77,6 +78,14 @@ export interface AskUserAction {
   rationale?: string;
 }
 
+export interface HandoffToUserAction {
+  action: "handoff_to_user";
+  ids: number[];
+  kind: string;
+  explanation: string;
+  rationale?: string;
+}
+
 export interface DoneAction {
   action: "done";
   summary: string;
@@ -91,6 +100,7 @@ export type PlannerAction =
   | ScrollAction
   | NavigateAction
   | AskUserAction
+  | HandoffToUserAction
   | DoneAction;
 
 export interface ValidationSuccess {
@@ -240,6 +250,15 @@ export const PLANNER_JSON_SCHEMA = {
     },
     {
       properties: {
+        action: { const: "handoff_to_user" },
+        ids: { type: "array", minItems: 1, items: { type: "integer", minimum: 1 } },
+        kind: { type: "string", minLength: 1 },
+        explanation: { type: "string", minLength: 1 },
+      },
+      required: ["action", "ids", "kind", "explanation"],
+    },
+    {
+      properties: {
         action: { const: "ask_user" },
         question: { type: "string", description: "Question to ask the user" },
         options: { type: "array", items: { type: "string" } },
@@ -326,6 +345,11 @@ export function validatePlannerAction(input: unknown): ValidationResult {
       return { valid: true, action: { action: "navigate", url: raw.url.trim(), rationale } };
     }
 
+    case "handoff_to_user": {
+      if (!Array.isArray(raw.ids) || raw.ids.length === 0 || !raw.ids.every((id) => Number.isInteger(id) && Number(id) > 0)) return { valid: false, error: "action 'handoff_to_user' requires positive integer ids." };
+      if (typeof raw.kind !== "string" || !raw.kind.trim() || typeof raw.explanation !== "string" || !raw.explanation.trim()) return { valid: false, error: "action 'handoff_to_user' requires kind and explanation." };
+      return { valid: true, action: { action: "handoff_to_user", ids: raw.ids as number[], kind: raw.kind.trim(), explanation: raw.explanation.trim(), rationale } };
+    }
     case "ask_user": {
       if (typeof raw.question !== "string" || raw.question.trim().length === 0) {
         return { valid: false, error: "action 'ask_user' requires a non-empty string 'question'." };
