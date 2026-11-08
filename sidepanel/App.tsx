@@ -20,13 +20,14 @@ import {
   type GnaniConfig,
 } from "../lib/gnani";
 import {
-  createPlanner,
+  describePlannerMode,
   answerAboutSnips,
   convertFormAnswerToEnglish,
   decomposeRequest,
   fallbackToSingleTask,
   shouldCallDecompositionModel,
   answerAboutPage,
+  resolvePlanner,
   type StepLogEntry,
   type SnipContext,
 } from "../lib/planner";
@@ -41,6 +42,18 @@ import { validatePlannerAction, type PlannerAction } from "../lib/schema";
 import type { SubTask } from "../lib/schema";
 import { getPlannerRetryAfterMs, isPlannerRateLimitError } from "../lib/planner";
 import { buildGuidance, type Guidance, type GuidanceAction } from "../lib/guidance";
+import {
+  buildFillAction,
+  collectFormFields,
+  findFormField,
+  isFormFillIntent,
+  mergeFormSessionFields,
+  resolveAmbiguousAnswerWithLLM,
+  resolveFormAnswer,
+  understandFormFields,
+  verifyFilledValue,
+  type FormFillSession,
+} from "../lib/form-model";
 import { MicrophoneSession } from "./mic";
 import {
   askSiteQuestion,
@@ -87,117 +100,8 @@ interface SettingsState {
   focusCompletedTab: boolean;
 }
 
-interface FormFieldDescriptor {
-  fingerprint: string;
-  identity: string;
-  occurrence: number;
-  label: string;
-  tag: string;
-  type?: string;
-  kind: "text" | "select" | "checkbox" | "radio";
-  name?: string;
-  options?: string[];
-}
-
-interface FormFillSession {
-  tabId: number;
-  goal: string;
-  fields: FormFieldDescriptor[];
-  index: number;
-  completed: Set<string>;
-  skippedManualCount: number;
-}
-
-function collectFormFields(snapshot: PageSnapshot): { fields: FormFieldDescriptor[]; manualFields: Array<{ id: number; label: string; reason: string }> } {
-  const occurrenceByIdentity = new Map<string, number>();
-  const manualFields: Array<{ id: number; label: string; reason: string }> = [];
-  const fields: FormFieldDescriptor[] = [];
-  const radioGroups = new Map<string, { field: FormFieldDescriptor; labels: string[] }>();
-  for (const element of snapshot.interactiveElements) {
-    if (!["input", "textarea", "select"].includes(element.tag)) continue;
-    const type = (element.type || "text").toLowerCase();
-    if (element.tag === "input" && ["button", "submit", "reset", "hidden", "image"].includes(type)) continue;
-    if (element.tag === "input" && type === "file") {
-      manualFields.push({ id: element.id, label: element.label || "File upload", reason: "Choose this file yourself" });
-      continue;
-    }
-    if (element.isSensitive) {
-      manualFields.push({ id: element.id, label: element.label || element.placeholder || element.name || "Sensitive field", reason: "Fill manually for your security" });
-      continue;
-    }
-
-    const label = element.label.trim() || element.placeholder?.trim() || element.name?.trim() || `${element.tag} field`;
-    if (element.tag === "input" && type === "radio") {
-      const groupName = element.name || label;
-      const identity = JSON.stringify(["radio", groupName]);
-      const existingGroup = radioGroups.get(identity);
-      if (existingGroup) {
-        if (!existingGroup.labels.includes(label)) existingGroup.labels.push(label);
-      } else {
-        const occurrence = occurrenceByIdentity.get(identity) || 0;
-        occurrenceByIdentity.set(identity, occurrence + 1);
-        const field: FormFieldDescriptor = {
-          fingerprint: `${identity}#${occurrence}`, identity, occurrence,
-          label: groupName.replace(/[_-]+/g, " "), tag: element.tag, type,
-          kind: "radio", name: element.name, options: [label],
-        };
-        radioGroups.set(identity, { field, labels: field.options! });
-        fields.push(field);
-      }
-      continue;
-    }
-
-    const identity = JSON.stringify([element.tag, element.type || "", label, element.name || "", element.placeholder || ""]);
-    const occurrence = occurrenceByIdentity.get(identity) || 0;
-    occurrenceByIdentity.set(identity, occurrence + 1);
-    const kind = element.tag === "select" ? "select" : type === "checkbox" ? "checkbox" : "text";
-    fields.push({ fingerprint: `${identity}#${occurrence}`, identity, occurrence, label, tag: element.tag, type: element.type, kind, name: element.name, options: kind === "select" ? element.options || [] : undefined });
-  }
-  return { fields, manualFields };
-}
-
 function isCurrentPageQuestion(text: string): boolean {
   return /\b(?:what does this mean|what is this|explain this|explain the page|what does .* mean|what is on this page|summarize this page)\b|इसका मतलब|समझाओ|इस पेज पर क्या/i.test(text.trim());
-}
-
-function findFormField(snapshot: PageSnapshot, descriptor: FormFieldDescriptor, answer?: string) {
-  if (descriptor.kind === "radio") {
-    const selectedLabel = matchOption(descriptor.options || [], answer || "");
-    if (!selectedLabel) return undefined;
-    return snapshot.interactiveElements.find((element) =>
-      element.tag === "input" && element.type?.toLowerCase() === "radio" && element.name === descriptor.name
-      && element.label.trim().toLowerCase() === selectedLabel.toLowerCase() && !element.isSensitive,
-    );
-  }
-  const matches = snapshot.interactiveElements.filter((element) => {
-    const label = element.label.trim() || element.placeholder?.trim() || element.name?.trim() || `${element.tag} field`;
-    const identity = JSON.stringify([element.tag, element.type || "", label, element.name || "", element.placeholder || ""]);
-    return identity === descriptor.identity && !element.isSensitive;
-  });
-  return matches[descriptor.occurrence];
-}
-
-function parseYesNo(value: string): boolean | null {
-  const answer = value.trim();
-  if (/^(yes|y|yeah|haan|ha|check|tick|true)(?:\b|$)/i.test(answer) || /^(हाँ|हां)(?:\s|$|[,!.])/u.test(answer)) return true;
-  if (/^(no|n|nope|nahin|nahi|leave unchecked|false)(?:\b|$)/i.test(answer) || /^(नहीं|नहि)(?:\s|$|[,!.])/u.test(answer)) return false;
-  return null;
-}
-
-function toEnglishDigits(value: string): string {
-  return value.replace(/[०-९]/g, (digit) => String("०१२३४५६७८९".indexOf(digit)));
-}
-
-function matchOption(options: string[], answer: string): string | undefined {
-  const normalized = answer.trim().toLowerCase();
-  const ordinal = new Map<string, number>([
-    ["पहला", 0], ["पहली", 0], ["एक", 0], ["दूसरा", 1], ["दूसरी", 1], ["दो", 1],
-    ["तीसरा", 2], ["तीसरी", 2], ["तीन", 2], ["चौथा", 3], ["चौथी", 3], ["चार", 3],
-  ]).get(normalized);
-  if (ordinal !== undefined) return options[ordinal];
-  const numericIndex = /^\d+$/.test(normalized) ? Number(normalized) - 1 : -1;
-  if (numericIndex >= 0) return options[numericIndex];
-  return options.find((option) => option.toLowerCase() === normalized || option.toLowerCase().includes(normalized));
 }
 
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
@@ -387,29 +291,6 @@ function resolveSpeechLanguage(languageCode: string, text: string): string {
   if (/\p{Script=Gujarati}/u.test(text)) return "gu-IN";
   if (/\p{Script=Devanagari}/u.test(text)) return "hi-IN";
   return "en-IN";
-}
-
-const FORM_QUESTION_COPY: Record<string, { checkbox: string; select: string; generic: string }> = {
-  "en-IN": { checkbox: "Should I check “%s”? Please answer yes or no.", select: "Which option should I choose for “%s”? Options: %s. Say the option or its number.", generic: "What should I enter for “%s”?" },
-  "hi-IN": { checkbox: "क्या मैं “%s” चुनूँ? कृपया हाँ या नहीं में जवाब दें।", select: "“%s” के लिए इनमें से कौन-सा विकल्प चुनूँ? %s। विकल्प का नाम या उसका क्रमांक बताइए।", generic: "“%s” के लिए कौन-सी जानकारी भरूँ? हिंदी में जवाब दें; मैं इसे अंग्रेज़ी में लिखूँगा।" },
-  "ta-IN": { checkbox: "“%s” என்பதைத் தேர்ந்தெடுக்கவா? ஆம் அல்லது இல்லை என்று சொல்லுங்கள்.", select: "“%s” என்பதற்கு எந்த விருப்பத்தைத் தேர்ந்தெடுக்க வேண்டும்? விருப்பங்கள்: %s. பெயர் அல்லது எண்ணைச் சொல்லுங்கள்.", generic: "“%s” என்பதற்கு என்ன தகவலை உள்ளிட வேண்டும்?" },
-  "te-IN": { checkbox: "“%s”ను ఎంచుకోవాలా? అవును లేదా కాదు అని చెప్పండి.", select: "“%s” కోసం ఏ ఎంపికను ఎంచుకోవాలి? ఎంపికలు: %s. పేరు లేదా సంఖ్య చెప్పండి.", generic: "“%s” కోసం ఏ సమాచారం నమోదు చేయాలి?" },
-  "kn-IN": { checkbox: "“%s” ಆಯ್ಕೆ ಮಾಡಬೇಕೇ? ಹೌದು ಅಥವಾ ಇಲ್ಲ ಎಂದು ಹೇಳಿ.", select: "“%s” ಗೆ ಯಾವ ಆಯ್ಕೆ ಮಾಡಬೇಕು? ಆಯ್ಕೆಗಳು: %s. ಹೆಸರು ಅಥವಾ ಸಂಖ್ಯೆ ಹೇಳಿ.", generic: "“%s” ಗೆ ಯಾವ ಮಾಹಿತಿಯನ್ನು ನಮೂದಿಸಬೇಕು?" },
-  "mr-IN": { checkbox: "“%s” निवडू का? कृपया हो किंवा नाही असे सांगा.", select: "“%s” साठी कोणता पर्याय निवडू? पर्याय: %s. नाव किंवा क्रमांक सांगा.", generic: "“%s” साठी कोणती माहिती भरू?" },
-  "gu-IN": { checkbox: "શું “%s” પસંદ કરું? કૃપા કરીને હા અથવા ના કહો.", select: "“%s” માટે કયો વિકલ્પ પસંદ કરું? વિકલ્પો: %s. નામ અથવા નંબર કહો.", generic: "“%s” માટે કઈ માહિતી ભરું?" },
-  "bn-IN": { checkbox: "“%s” নির্বাচন করব? হ্যাঁ বা না বলুন।", select: "“%s”-এর জন্য কোন বিকল্পটি নেব? বিকল্প: %s। নাম বা নম্বর বলুন।", generic: "“%s”-এর জন্য কী তথ্য দেব?" },
-  "pa-IN": { checkbox: "ਕੀ ਮੈਂ “%s” ਚੁਣਾਂ? ਹਾਂ ਜਾਂ ਨਹੀਂ ਦੱਸੋ।", select: "“%s” ਲਈ ਕਿਹੜਾ ਵਿਕਲਪ ਚੁਣਾਂ? ਵਿਕਲਪ: %s। ਨਾਮ ਜਾਂ ਨੰਬਰ ਦੱਸੋ।", generic: "“%s” ਲਈ ਕਿਹੜੀ ਜਾਣਕਾਰੀ ਭਰਾਂ?" },
-  "ml-IN": { checkbox: "“%s” തിരഞ്ഞെടുക്കട്ടേ? അതെ അല്ലെങ്കിൽ ഇല്ല എന്ന് പറയുക.", select: "“%s” എന്നതിന് ഏത് ഓപ്ഷൻ തിരഞ്ഞെടുക്കണം? ഓപ്ഷനുകൾ: %s. പേരോ നമ്പറോ പറയുക.", generic: "“%s” എന്നതിന് എന്ത് വിവരമാണ് നൽകേണ്ടത്?" },
-};
-
-function localizedFormQuestion(field: FormFieldDescriptor, languageCode: string): string {
-  const copy = FORM_QUESTION_COPY[languageCode] || FORM_QUESTION_COPY["en-IN"];
-  const label = field.label.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-  if (field.kind === "checkbox") return copy.checkbox.replace("%s", label);
-  if (field.kind === "select" || field.kind === "radio") {
-    return copy.select.replace("%s", label).replace("%s", field.options?.filter(Boolean).join(", ") || "");
-  }
-  return copy.generic.replace("%s", label);
 }
 
 const ACTION_TAG_TRANSLATIONS: Record<string, Record<string, string>> = {
@@ -782,46 +663,79 @@ export const App: React.FC = () => {
 
   const askNextFormField = async () => {
     const session = formFillRef.current;
-    const field = session?.fields[session.index];
-    if (!session || !field) return;
-    const question = localizedFormQuestion(field, resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || ""));
+    if (!session) return;
+
+    // Skip fields whose answers are already known in this session.
+    while (session.index < session.fields.length) {
+      const candidate = session.fields[session.index];
+      if (candidate.knownValue && !session.answers.has(candidate.fingerprint)) {
+        session.answers.set(candidate.fingerprint, candidate.knownValue);
+        const applied = await submitFormFieldAnswer(candidate.knownValue, { fromKnownValue: true });
+        if (applied) return;
+      }
+      break;
+    }
+
+    const field = session.fields[session.index];
+    if (!field) return;
+    const question = field.askPrompt || `${field.question || field.label}?`;
     setStatus("idle");
-    setStatusText(`${translate("Field", "फ़ील्ड")} ${session.index + 1} / ${session.fields.length}: ${field.label}`);
+    const modeNote = session.plannerMode === "heuristic" ? " · heuristic Q&A" : "";
+    setStatusText(`${translate("Field", "फ़ील्ड")} ${session.index + 1} / ${session.fields.length}: ${field.question || field.label}${modeNote}`);
     await speakStatus(question);
-    setStatusText(`${translate("Reply with a value for", "इसके लिए जानकारी दें")}: ${field.label}`);
+    setStatusText(`${translate("Reply with a value for", "इसके लिए जानकारी दें")}: ${field.question || field.label}`);
   };
 
-  const submitFormFieldAnswer = async (answer: string) => {
+  const submitFormFieldAnswer = async (answer: string, options?: { fromKnownValue?: boolean }) => {
     const session = formFillRef.current;
     const field = session?.fields[session.index];
     if (!session || !field) return false;
-    let value = toEnglishDigits(answer.trim());
-    if (!value) {
-      setStatusText(`Please answer for: ${field.label}`);
-      return true;
-    }
+
+    const llmConfig = {
+      provider: settings.llmProvider,
+      apiKey: settings.llmApiKey,
+      endpoint: settings.llmEndpoint,
+      model: settings.llmModel,
+    } as const;
 
     setStatus("thinking");
-    setStatusText(`${translate("Filling", "भर रहे हैं:")} ${field.label}...`);
+    setStatusText(`${translate("Filling", "भर रहे हैं:")} ${field.question || field.label}...`);
     try {
-      const freshSnapshot = await fetchPageSnapshot(session.tabId);
-      const checkboxChoice = field.kind === "checkbox" ? parseYesNo(value) : null;
-      if (field.kind === "checkbox" && checkboxChoice === null) {
+      let resolution = resolveFormAnswer(field, answer);
+      if (resolution.status === "empty") {
         setStatus("idle");
-        setStatusText(`Please answer yes or no for: ${field.label}.`);
+        setStatusText(resolution.message || `Please answer for: ${field.question || field.label}`);
+        return true;
+      }
+      if (resolution.status === "ambiguous" || resolution.status === "invalid") {
+        resolution = await resolveAmbiguousAnswerWithLLM(
+          llmConfig,
+          field,
+          answer,
+          resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || ""),
+        );
+      }
+      if (resolution.status !== "matched") {
+        setStatus("idle");
+        setStatusText(resolution.message || `Please clarify: ${field.question || field.label}`);
         return true;
       }
 
+      let value = resolution.value || "";
+      const freshSnapshot = await fetchPageSnapshot(session.tabId);
       const element = findFormField(freshSnapshot, field, field.kind === "radio" ? value : undefined);
-      if (!element && field.kind === "radio") {
+      if (!element && (field.kind === "radio" || field.kind === "select" || field.kind === "combobox")) {
         setStatus("idle");
-        setStatusText(`Choose one of these options for ${field.label}: ${field.options?.join(", ") || ""}`);
+        setStatusText(`Choose one of these options for ${field.question || field.label}: ${field.options?.join(", ") || ""}`);
         return true;
       }
-      if (!element) throw new Error(`I can no longer find the ${field.label} field. Check the page and try again.`);
+      if (!element) throw new Error(`I can no longer find the ${field.question || field.label} field. The page may have changed — try again.`);
+      if (element.interactable === false) {
+        throw new Error(`The ${field.question || field.label} field is not interactable right now.`);
+      }
 
       if (field.kind === "text" && /\p{Script=Devanagari}/u.test(value)) {
-        const normalizedField = `${field.label} ${field.name || ""} ${field.type || ""}`.toLowerCase();
+        const normalizedField = `${field.question} ${field.label} ${field.name || ""} ${field.type || ""}`.toLowerCase();
         if (/email|e-mail|url|website|website address/.test(normalizedField)) {
           setStatus("idle");
           setStatusText("यह जानकारी अंग्रेज़ी अक्षरों में टाइप करें, ताकि ईमेल या लिंक सही रहे।");
@@ -833,15 +747,11 @@ export const App: React.FC = () => {
             ? "transliterate"
             : "translate";
         try {
-          value = await convertFormAnswerToEnglish({
-            provider: settings.llmProvider,
-            apiKey: settings.llmApiKey,
-            endpoint: settings.llmEndpoint,
-            model: settings.llmModel,
-          }, value, conversionMode);
+          value = await convertFormAnswerToEnglish(llmConfig, value, conversionMode);
           if (/\p{Script=Devanagari}/u.test(value)) {
             throw new Error("The converted value still contains Devanagari text.");
           }
+          resolution = { ...resolution, value, matchedOption: resolution.matchedOption };
         } catch (conversionError) {
           console.warn("Hindi form answer conversion failed:", conversionError);
           setStatus("idle");
@@ -849,42 +759,47 @@ export const App: React.FC = () => {
           return true;
         }
       }
-      let selectedValue = value;
-      if (field.kind === "select") {
-        const match = matchOption(field.options || [], value);
-        if (field.options?.length && !match) {
-          setStatus("idle");
-          setStatusText(`Choose one of these options for ${field.label}: ${field.options.join(", ")}`);
-          return true;
-        }
-        selectedValue = match || value;
-      }
-      let candidate: PlannerAction | null;
-      if (field.kind === "checkbox") {
-        candidate = element.checked === checkboxChoice ? null : { action: "click", id: element.id, rationale: `${checkboxChoice ? "Checked" : "Unchecked"} ${field.label}.` };
-      } else if (field.kind === "radio") {
-        candidate = element.checked ? null : { action: "click", id: element.id, rationale: `Selected ${value} for ${field.label}.` };
-      } else if (field.kind === "select") {
-        candidate = { action: "select", id: element.id, value: selectedValue };
-      } else {
-        candidate = { action: "type", id: element.id, text: value };
-      }
 
-      let response: { ok: boolean; error?: string; freshSnapshot?: PageSnapshot } | null = null;
+      const candidate = buildFillAction(field, element, { ...resolution, value });
+      let response: { ok: boolean; error?: string; freshSnapshot?: PageSnapshot; verified?: boolean; observedValue?: string } | null = null;
       if (candidate) {
         const validation = validatePlannerAction(candidate);
         if (!validation.valid) throw new Error(validation.error);
         const safety = inspectActionSafety(validation.action, freshSnapshot);
         if (!safety.permitted) throw new Error(safety.reason || "Safety blocked this field.");
         if (safety.requiresConfirmation) {
+          // Never auto-submit. Skip consequential controls and continue.
           session.skippedManualCount += 1;
-          await speakStatus(`I left ${field.label} unchanged because it needs a separate confirmation. I will continue to the next field.`);
+          await speakStatus(`I left ${field.question || field.label} unchanged because it needs your explicit confirmation. I will continue to the next field.`);
         } else {
-          response = await sendTabMessage<{ ok: boolean; error?: string; freshSnapshot?: PageSnapshot }>(session.tabId, {
+          response = await sendTabMessage<{ ok: boolean; error?: string; freshSnapshot?: PageSnapshot; verified?: boolean; observedValue?: string }>(session.tabId, {
             type: "BV_EXECUTE_ACTION",
             action: validation.action,
           });
-          if (!response?.ok) throw new Error(response?.error || `Could not fill ${field.label}.`);
+          if (!response?.ok) throw new Error(response?.error || `Could not fill ${field.question || field.label}.`);
+
+          const verifySnapshot = (response.freshSnapshot || await fetchPageSnapshot(session.tabId)) as PageSnapshot;
+          const filledElement = findFormField(verifySnapshot, field, field.kind === "radio" ? value : undefined)
+            || verifySnapshot.interactiveElements.find((item) => item.id === element.id);
+          const verification = verifyFilledValue(filledElement, field, { ...resolution, value });
+          if (!verification.ok && response.verified === false) {
+            throw new Error(verification.reason || `I could not verify that “${field.question || field.label}” was filled correctly.`);
+          }
+          if (!verification.ok) {
+            // Soft retry once with a fresh observation when executor claimed success but snapshot disagrees.
+            const retry = await sendTabMessage<{ ok: boolean; error?: string; freshSnapshot?: PageSnapshot; verified?: boolean }>(session.tabId, {
+              type: "BV_EXECUTE_ACTION",
+              action: validation.action,
+            });
+            const retrySnapshot = (retry?.freshSnapshot || await fetchPageSnapshot(session.tabId)) as PageSnapshot;
+            const retryElement = findFormField(retrySnapshot, field, field.kind === "radio" ? value : undefined)
+              || retrySnapshot.interactiveElements.find((item) => item.id === element.id);
+            const retryVerification = verifyFilledValue(retryElement, field, { ...resolution, value });
+            if (!retryVerification.ok) {
+              throw new Error(retryVerification.reason || `Verification failed for “${field.question || field.label}”.`);
+            }
+            response = { ...retry, freshSnapshot: retrySnapshot };
+          }
 
           const stepNumber = stepsRef.current.length + 1;
           const fieldOutcome = localizedActionSpeech(validation.action, freshSnapshot, resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript));
@@ -895,21 +810,23 @@ export const App: React.FC = () => {
             spokenSummary: fieldOutcome,
             timestamp: Date.now(),
           }]);
-          await speakStatus(fieldOutcome);
+          if (!options?.fromKnownValue) await speakStatus(fieldOutcome);
         }
       }
+
       session.completed.add(field.fingerprint);
+      session.answers.set(field.fingerprint, value);
 
       const updatedSnapshot = (response?.freshSnapshot || await fetchPageSnapshot(session.tabId)) as PageSnapshot;
       const refreshed = collectFormFields(updatedSnapshot);
-      session.skippedManualCount = Math.max(session.skippedManualCount, refreshed.manualFields.length);
-      session.fields = refreshed.fields.filter((candidateField) => !session.completed.has(candidateField.fingerprint));
-      session.index = 0;
+      const merged = mergeFormSessionFields(session, refreshed);
+      formFillRef.current = merged;
 
-      if (session.fields.length === 0) {
-        const skippedMessage = session.skippedManualCount > 0
-          ? "The supported fields are filled. Fill any sensitive, file, or protected fields yourself, then review the form. I did not submit it."
-          : "The visible fields are filled. Please review the form. I did not submit it.";
+      if (merged.fields.length === 0) {
+        merged.awaitingSubmitApproval = true;
+        const skippedMessage = merged.skippedManualCount > 0
+          ? "The supported fields are filled. Fill any sensitive, file, or protected fields yourself, then review the form. Say when you want me to submit — I will not submit without your approval."
+          : "The visible fields are filled. Please review the form. I did not submit it. Say submit only if you want me to send it.";
         formFillRef.current = null;
         taskGoalRef.current = null;
         conversationRef.current = [];
@@ -1412,7 +1329,11 @@ export const App: React.FC = () => {
   };
 
   const runTaskForCard = async (task: SubTask, tabId: number): Promise<TaskRunnerResult> => {
-    const planner = createPlanner({ provider: settings.llmProvider, apiKey: settings.llmApiKey, endpoint: settings.llmEndpoint, model: settings.llmModel });
+    const resolvedPlanner = resolvePlanner({ provider: settings.llmProvider, apiKey: settings.llmApiKey, endpoint: settings.llmEndpoint, model: settings.llmModel });
+    const planner = resolvedPlanner.planner;
+    if (resolvedPlanner.degraded) {
+      setStatusText(resolvedPlanner.reason || "Using offline mock planner — not an LLM.");
+    }
     const context = createTaskRunnerContext({
       tabId,
       goal: task.goal,
@@ -1454,16 +1375,49 @@ export const App: React.FC = () => {
       publishTaskCard(task.id, { status: "paused", currentStep: guidance.title, error: guidance.whatHappened, guidance });
       return { status: "paused", error: guidance.whatHappened, context };
     }
-    const formFillIntent = /\b(fill|complete|populate|enter details|register|sign up|apply for|bhar(?:o|na|do|de))\b|फॉर्म|फ़ॉर्म|भर(?:ो|ना|ें)/i.test(task.goal);
-    if (activeTaskIdsRef.current.length === 1 && formFillIntent && !formFillRef.current) {
+    if (activeTaskIdsRef.current.length === 1 && isFormFillIntent(task.goal) && !formFillRef.current) {
       try {
         const snapshot = await fetchPageSnapshot(tabId);
-        const { fields, manualFields } = collectFormFields(snapshot);
-        if (manualFields.length > 0) await sendTabMessage(tabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: manualFields });
-        if (fields.length > 0) {
-          formFillRef.current = { tabId, goal: task.goal, fields, index: 0, completed: new Set(), skippedManualCount: manualFields.length };
-          publishTaskCard(task.id, { status: "waiting_question", currentStep: "Waiting for form details" });
-          if (manualFields.length > 0) await speakStatus("I will leave sensitive and file fields for you to handle manually.");
+        const collected = collectFormFields(snapshot);
+        if (collected.manualFields.length > 0) {
+          await sendTabMessage(tabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: collected.manualFields });
+        }
+        if (collected.fields.length > 0) {
+          const llmConfig = {
+            provider: settings.llmProvider,
+            apiKey: settings.llmApiKey,
+            endpoint: settings.llmEndpoint,
+            model: settings.llmModel,
+          } as const;
+          publishTaskCard(task.id, { status: "waiting_question", currentStep: "Understanding the form…" });
+          setStatusText(translate("Understanding the form…", "फॉर्म समझ रहे हैं…"));
+          const understood = await understandFormFields(llmConfig, collected.fields, {
+            languageCode: resolveSpeechLanguage(settings.languageCode, task.goal),
+            pageTitle: snapshot.title,
+            pageSummary: snapshot.summary,
+            conversation: conversationRef.current,
+          });
+          formFillRef.current = {
+            tabId,
+            goal: task.goal,
+            fields: understood.fields,
+            index: 0,
+            completed: new Set(),
+            answers: new Map(),
+            skippedManualCount: collected.manualFields.length,
+            plannerMode: understood.mode,
+            awaitingSubmitApproval: false,
+          };
+          publishTaskCard(task.id, {
+            status: "waiting_question",
+            currentStep: understood.mode === "llm" ? "Waiting for form details (LLM)" : "Waiting for form details (heuristic)",
+          });
+          if (collected.manualFields.length > 0) {
+            await speakStatus("I will leave sensitive and file fields for you to handle manually.");
+          }
+          if (understood.mode === "heuristic" && settings.llmProvider !== "mock") {
+            await speakStatus("Form questions are using the local understanding engine right now. Configure or check your LLM key for richer questions.");
+          }
           await askNextFormField();
           return { status: "waiting_question", context };
         }
@@ -2016,7 +1970,7 @@ export const App: React.FC = () => {
           </div>
           <div className="status-engine" title={activeTabTitle || "Current browser tab"}>
             <span className="engine-dot" />
-            <span>{settings.llmProvider === "mock" ? "Offline engine" : `${settings.llmModel || "AI"} engine`}</span>
+            <span>{describePlannerMode({ provider: settings.llmProvider, apiKey: settings.llmApiKey, model: settings.llmModel }).label}</span>
           </div>
         </div>
 

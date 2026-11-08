@@ -7,7 +7,7 @@
  * - Safe action execution
  */
 
-import { capturePageSnapshot, getElementById } from "./observer";
+import { capturePageSnapshot, getElementById, readElementState } from "./observer";
 import { executeAction } from "./executor";
 import type { PlannerAction } from "../lib/schema";
 
@@ -296,7 +296,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         .then((result) => {
           // Immediately capture fresh post-action observation
           const freshSnapshot = capturePageSnapshot();
-          sendResponse({ ok: result.success, result, error: result.error, freshSnapshot });
+          sendResponse({
+            ok: result.success,
+            result,
+            error: result.error,
+            freshSnapshot,
+            verified: result.verified,
+            observedValue: result.observedValue,
+          });
         })
         .catch((err) => {
           sendResponse({
@@ -306,6 +313,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         });
 
       return true; // Keep channel open for async response
+    }
+
+    case "BV_READ_ELEMENT_STATE": {
+      const id = Number(message.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        sendResponse({ ok: false, error: "Element id is required." });
+        return true;
+      }
+      sendResponse({ ok: true, state: readElementState(id) });
+      return true;
     }
 
     default:

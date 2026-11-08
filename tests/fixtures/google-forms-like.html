@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Internship Application (Google Forms–like fixture)</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 720px; margin: 2rem auto; color: #202124; }
+    .question { border: 1px solid #dadce0; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+    .title { font-size: 1.1rem; font-weight: 500; margin-bottom: 0.75rem; }
+    .required::after { content: " *"; color: #d93025; }
+    input[type="text"], textarea { width: 100%; padding: 0.5rem; border: none; border-bottom: 1px solid #dadce0; }
+    .option { display: flex; gap: 0.5rem; align-items: center; margin: 0.4rem 0; cursor: pointer; }
+    .custom-radio, .custom-checkbox {
+      width: 18px; height: 18px; border: 2px solid #5f6368; border-radius: 50%; display: inline-flex;
+      align-items: center; justify-content: center;
+    }
+    .custom-checkbox { border-radius: 3px; }
+    .custom-radio[aria-checked="true"]::after, .custom-checkbox[aria-checked="true"]::after {
+      content: ""; width: 10px; height: 10px; background: #1a73e8; border-radius: inherit;
+    }
+    .combobox { position: relative; }
+    .combobox-trigger {
+      width: 100%; text-align: left; padding: 0.6rem 0.75rem; border: 1px solid #dadce0; border-radius: 4px; background: #fff;
+    }
+    .listbox {
+      display: none; position: absolute; left: 0; right: 0; background: #fff; border: 1px solid #dadce0;
+      border-radius: 4px; margin-top: 4px; z-index: 2; max-height: 180px; overflow: auto;
+    }
+    .listbox.open { display: block; }
+    .listbox [role="option"] { padding: 0.55rem 0.75rem; cursor: pointer; }
+    .listbox [role="option"][aria-selected="true"], .listbox [role="option"]:hover { background: #e8f0fe; }
+    .conditional { display: none; }
+    .conditional.visible { display: block; }
+    button.submit { background: #1a73e8; color: white; border: 0; padding: 0.65rem 1.2rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Internship Application</h1>
+  <p>Realistic Google Forms–like controls using ARIA for Browse Voice tests.</p>
+
+  <form id="application-form" onsubmit="event.preventDefault(); document.getElementById('status').textContent='Submitted (fixture only)';">
+    <div class="question" role="group" aria-labelledby="q-name">
+      <div id="q-name" class="title required" role="heading" aria-level="2">Full Name</div>
+      <input id="full-name" type="text" name="full_name" aria-labelledby="q-name" required placeholder="Your answer" />
+    </div>
+
+    <div class="question" role="group" aria-labelledby="q-email">
+      <div id="q-email" class="title required" role="heading" aria-level="2">Email</div>
+      <input id="email" type="email" name="email" aria-labelledby="q-email" required />
+    </div>
+
+    <div class="question" role="group" aria-labelledby="q-edu">
+      <div id="q-edu" class="title required" role="heading" aria-level="2">What is your highest educational qualification?</div>
+      <div role="radiogroup" aria-labelledby="q-edu" id="education-group">
+        <div class="option">
+          <div class="custom-radio" role="radio" tabindex="0" aria-checked="false" data-value="High School" aria-label="High School"></div>
+          <span>High School</span>
+        </div>
+        <div class="option">
+          <div class="custom-radio" role="radio" tabindex="0" aria-checked="false" data-value="Bachelor's" aria-label="Bachelor's"></div>
+          <span>Bachelor's</span>
+        </div>
+        <div class="option">
+          <div class="custom-radio" role="radio" tabindex="0" aria-checked="false" data-value="Master's" aria-label="Master's"></div>
+          <span>Master's</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="question" role="group" aria-labelledby="q-lang">
+      <div id="q-lang" class="title" role="heading" aria-level="2">Select your preferred programming language</div>
+      <div class="combobox">
+        <button type="button" class="combobox-trigger" role="combobox" aria-labelledby="q-lang" aria-expanded="false" aria-controls="lang-list" id="lang-combo" data-value="">Choose</button>
+        <div class="listbox" role="listbox" id="lang-list">
+          <div role="option" tabindex="-1" data-value="JavaScript">JavaScript</div>
+          <div role="option" tabindex="-1" data-value="Python">Python</div>
+          <div role="option" tabindex="-1" data-value="Java">Java</div>
+          <div role="option" tabindex="-1" data-value="Go">Go</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="question" role="group" aria-labelledby="q-relocate">
+      <div id="q-relocate" class="title required" role="heading" aria-level="2">Are you willing to relocate?</div>
+      <div role="radiogroup" aria-labelledby="q-relocate">
+        <div class="option">
+          <div class="custom-radio" role="radio" name-group="relocate" tabindex="0" aria-checked="false" data-value="Yes" aria-label="Yes"></div>
+          <span>Yes</span>
+        </div>
+        <div class="option">
+          <div class="custom-radio" role="radio" name-group="relocate" tabindex="0" aria-checked="false" data-value="No" aria-label="No"></div>
+          <span>No</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="question conditional" id="city-question" role="group" aria-labelledby="q-city">
+      <div id="q-city" class="title" role="heading" aria-level="2">Which city can you relocate to?</div>
+      <input id="city" type="text" aria-labelledby="q-city" placeholder="City name" />
+    </div>
+
+    <div class="question" role="group" aria-labelledby="q-why">
+      <div id="q-why" class="title" role="heading" aria-level="2">Why do you want to join this internship?</div>
+      <textarea id="why" rows="4" aria-labelledby="q-why" placeholder="Your answer"></textarea>
+    </div>
+
+    <div class="question" role="group" aria-labelledby="q-terms">
+      <div id="q-terms" class="title" role="heading" aria-level="2">I agree to the terms</div>
+      <div class="option">
+        <div class="custom-checkbox" role="checkbox" tabindex="0" aria-checked="false" aria-labelledby="q-terms" aria-label="I agree to the terms"></div>
+        <span>I agree</span>
+      </div>
+    </div>
+
+    <div class="question" role="group" aria-labelledby="q-password">
+      <div id="q-password" class="title" role="heading" aria-level="2">Account password</div>
+      <input id="password" type="password" name="password" aria-labelledby="q-password" autocomplete="new-password" />
+    </div>
+
+    <button class="submit" type="submit">Submit</button>
+    <p id="status" role="status"></p>
+  </form>
+
+  <script>
+    function selectRadio(target) {
+      const group = target.closest("[role='radiogroup']");
+      group.querySelectorAll("[role='radio']").forEach((radio) => radio.setAttribute("aria-checked", "false"));
+      target.setAttribute("aria-checked", "true");
+      if (target.getAttribute("data-value") === "Yes" && target.closest("[aria-labelledby='q-relocate']")) {
+        document.getElementById("city-question").classList.add("visible");
+      }
+      if (target.getAttribute("data-value") === "No" && target.closest("[aria-labelledby='q-relocate']")) {
+        document.getElementById("city-question").classList.remove("visible");
+      }
+    }
+
+    document.querySelectorAll("[role='radio']").forEach((radio) => {
+      radio.addEventListener("click", () => selectRadio(radio));
+      radio.addEventListener("keydown", (event) => {
+        if (event.key === " " || event.key === "Enter") { event.preventDefault(); selectRadio(radio); }
+      });
+    });
+
+    document.querySelectorAll("[role='checkbox']").forEach((box) => {
+      const toggle = () => box.setAttribute("aria-checked", box.getAttribute("aria-checked") === "true" ? "false" : "true");
+      box.addEventListener("click", toggle);
+      box.addEventListener("keydown", (event) => {
+        if (event.key === " " || event.key === "Enter") { event.preventDefault(); toggle(); }
+      });
+    });
+
+    const combo = document.getElementById("lang-combo");
+    const list = document.getElementById("lang-list");
+    combo.addEventListener("click", () => {
+      const open = list.classList.toggle("open");
+      combo.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    list.querySelectorAll("[role='option']").forEach((option) => {
+      option.addEventListener("click", () => {
+        list.querySelectorAll("[role='option']").forEach((item) => item.setAttribute("aria-selected", "false"));
+        option.setAttribute("aria-selected", "true");
+        combo.dataset.value = option.dataset.value;
+        combo.textContent = option.dataset.value;
+        list.classList.remove("open");
+        combo.setAttribute("aria-expanded", "false");
+      });
+    });
+  </script>
+</body>
+</html>

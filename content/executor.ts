@@ -1,18 +1,11 @@
 /**
  * Action Executor for Browse Voice Content Script.
  *
- * Executes planner actions against live DOM elements:
- * - click(id)
- * - type(id, text)
- * - select(id, value)
- * - press_key(key)
- * - scroll(direction, amount)
- * - navigate(url)
- *
- * Then waits for the page to settle before capturing the next observation.
+ * Executes planner actions against live DOM elements with React-aware
+ * value setting, custom dropdown / ARIA support, and post-action verification.
  */
 
-import { getElementById } from "./observer";
+import { getElementById, readElementState } from "./observer";
 import { isAllowedNavigationUrl, type PlannerAction } from "../lib/schema";
 import { detectSensitiveField } from "../lib/safety";
 
@@ -22,6 +15,8 @@ export interface ExecutionResult {
   error?: string;
   settled: boolean;
   waitedMs: number;
+  verified?: boolean;
+  observedValue?: string;
 }
 
 /** Use the browser's native setter so React/Vue controlled inputs observe updates. */
@@ -32,9 +27,6 @@ export function setNativeElementValue(element: HTMLInputElement | HTMLTextAreaEl
   else element.value = value;
 }
 
-/**
- * Temporarily highlights an element to give visual feedback to the user.
- */
 function flashElementHighlight(el: HTMLElement): void {
   const originalOutline = el.style.outline;
   const originalTransition = el.style.transition;
@@ -50,9 +42,6 @@ function flashElementHighlight(el: HTMLElement): void {
   }, 800);
 }
 
-/**
- * Waits for dynamic page mutations, network activities, and AJAX renders to settle.
- */
 export async function waitForPageSettle(timeoutMs: number = 2000): Promise<{ settled: boolean; waitedMs: number }> {
   const startedAt = performance.now();
   const quietPeriodMs = 300;
@@ -68,7 +57,7 @@ export async function waitForPageSettle(timeoutMs: number = 2000): Promise<{ set
       subtree: true,
       attributes: true,
       characterData: true,
-      attributeFilter: ["class", "style", "aria-busy", "disabled"],
+      attributeFilter: ["class", "style", "aria-busy", "disabled", "aria-checked", "aria-selected", "value"],
     });
 
     const check = () => {
@@ -97,6 +86,159 @@ export async function waitForPageSettle(timeoutMs: number = 2000): Promise<{ set
   });
 }
 
+function dispatchClick(el: HTMLElement): void {
+  el.focus();
+  el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+  el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
+  el.click();
+}
+
+function normalizeMatch(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function valuesMatch(observed: string | undefined, expected: string): boolean {
+  if (!observed) return false;
+  const left = normalizeMatch(observed);
+  const right = normalizeMatch(expected);
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+async function typeIntoElement(el: HTMLElement, text: string): Promise<void> {
+  flashElementHighlight(el);
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.focus();
+
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+    setNativeElementValue(el, text);
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+
+  if (el.isContentEditable || (el.getAttribute("role") || "").toLowerCase() === "textbox") {
+    el.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.execCommand?.("selectAll", false);
+    document.execCommand?.("insertText", false, text);
+    if ((el.innerText || "").trim() !== text.trim()) {
+      el.textContent = text;
+    }
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+
+  // Combobox-like custom inputs: set text and notify listeners.
+  if ("value" in el) {
+    try {
+      (el as HTMLInputElement).value = text;
+    } catch {
+      // ignore
+    }
+  }
+  el.setAttribute("value", text);
+  el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function selectNativeOption(el: HTMLSelectElement, value: string): Promise<boolean> {
+  const needle = normalizeMatch(value);
+  for (let i = 0; i < el.options.length; i++) {
+    const opt = el.options[i];
+    if (normalizeMatch(opt.value) === needle || normalizeMatch(opt.text).includes(needle) || needle.includes(normalizeMatch(opt.text))) {
+      el.selectedIndex = i;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
+  }
+  el.value = value;
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  return valuesMatch(el.selectedOptions[0]?.text || el.value, value);
+}
+
+async function selectCustomOption(el: HTMLElement, value: string): Promise<boolean> {
+  const needle = normalizeMatch(value);
+  flashElementHighlight(el);
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+
+  const role = (el.getAttribute("role") || "").toLowerCase();
+  const isOption = role === "option" || role === "radio" || role === "menuitemradio" || role === "checkbox";
+  if (isOption) {
+    dispatchClick(el);
+    await waitForPageSettle(500);
+    const checked = el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-selected") === "true";
+    return checked || normalizeMatch(el.innerText || "") === needle;
+  }
+
+  // Open combobox / listbox then choose matching option.
+  dispatchClick(el);
+  await waitForPageSettle(700);
+
+  const controlledId = el.getAttribute("aria-controls") || el.getAttribute("aria-owns");
+  const scopes: ParentNode[] = [];
+  if (controlledId) {
+    const controlled = document.getElementById(controlledId);
+    if (controlled) scopes.push(controlled);
+  }
+  scopes.push(el.parentElement || document.body, document.body);
+
+  for (const scope of scopes) {
+    const options = Array.from(scope.querySelectorAll<HTMLElement>(
+      "[role='option'],[role='radio'],[role='menuitemradio'],[role='checkbox'],option",
+    ));
+    const match = options.find((option) => {
+      const label = normalizeMatch(option.getAttribute("aria-label") || option.innerText || option.textContent || "");
+      return label === needle || label.includes(needle) || needle.includes(label);
+    });
+    if (match) {
+      dispatchClick(match);
+      await waitForPageSettle(500);
+      return true;
+    }
+  }
+
+  // Last resort: type the value into the combobox.
+  await typeIntoElement(el, value);
+  await waitForPageSettle(400);
+  return true;
+}
+
+export function verifyActionResult(action: PlannerAction): { verified: boolean; observedValue?: string; error?: string } {
+  if (action.action === "type") {
+    const state = readElementState(action.id);
+    if (!state.found) return { verified: false, error: `Element ID [${action.id}] disappeared after typing.` };
+    const ok = valuesMatch(state.value, action.text);
+    return { verified: ok, observedValue: state.value, error: ok ? undefined : "Typed value was not present after the action." };
+  }
+
+  if (action.action === "select") {
+    const state = readElementState(action.id);
+    if (!state.found) return { verified: false, error: `Element ID [${action.id}] disappeared after selection.` };
+    const observed = state.selected || state.value || state.label || "";
+    const ok = valuesMatch(observed, action.value) || state.checked === true;
+    return { verified: ok, observedValue: observed, error: ok ? undefined : "Selected value was not present after the action." };
+  }
+
+  if (action.action === "click") {
+    const state = readElementState(action.id);
+    if (!state.found) return { verified: true, observedValue: "clicked" };
+    return {
+      verified: true,
+      observedValue: state.checked === undefined ? state.value || state.label : (state.checked ? "checked" : "unchecked"),
+    };
+  }
+
+  return { verified: true };
+}
+
 /**
  * Executes a single verified PlannerAction.
  */
@@ -119,19 +261,17 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
 
         flashElementHighlight(el);
         el.scrollIntoView({ behavior: "smooth", block: "center" });
-
-        // Dispatch realistic user mouse events
-        el.focus();
-        el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
-        el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
-        el.click();
+        dispatchClick(el);
 
         const settle = await waitForPageSettle();
+        const verification = verifyActionResult(action);
         return {
           success: true,
           action,
           settled: settle.settled,
           waitedMs: settle.waitedMs,
+          verified: verification.verified,
+          observedValue: verification.observedValue,
         };
       }
 
@@ -147,7 +287,6 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
           };
         }
 
-        // Safety enforcement: NEVER type into sensitive fields
         const sensitivity = detectSensitiveField({
           type: el instanceof HTMLInputElement ? el.type : undefined,
           name: el.getAttribute("name") || el.id,
@@ -165,35 +304,35 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
           };
         }
 
-        flashElementHighlight(el);
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.focus();
+        await typeIntoElement(el, action.text);
+        const settle = await waitForPageSettle(600);
+        let verification = verifyActionResult(action);
 
-        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-          setNativeElementValue(el, action.text);
-          el.dispatchEvent(new InputEvent("input", { bubbles: true, data: action.text }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-        } else {
-          el.innerText = action.text;
-          el.dispatchEvent(new InputEvent("input", { bubbles: true, data: action.text }));
+        // One safe retry for stubborn React-controlled inputs.
+        if (!verification.verified) {
+          await typeIntoElement(el, action.text);
+          await waitForPageSettle(400);
+          verification = verifyActionResult(action);
         }
 
-        const settle = await waitForPageSettle(600);
         return {
-          success: true,
+          success: verification.verified,
           action,
+          error: verification.verified ? undefined : verification.error,
           settled: settle.settled,
           waitedMs: settle.waitedMs,
+          verified: verification.verified,
+          observedValue: verification.observedValue,
         };
       }
 
       case "select": {
         const el = getElementById(action.id);
-        if (!el || !(el instanceof HTMLSelectElement)) {
+        if (!el) {
           return {
             success: false,
             action,
-            error: `Element ID [${action.id}] is not a valid <select> dropdown.`,
+            error: `Element ID [${action.id}] was not found in the current page.`,
             settled: true,
             waitedMs: 0,
           };
@@ -202,31 +341,24 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
         flashElementHighlight(el);
         el.scrollIntoView({ behavior: "smooth", block: "center" });
 
-        // Match option by value or text
         let matched = false;
-        for (let i = 0; i < el.options.length; i++) {
-          const opt = el.options[i];
-          if (
-            opt.value.toLowerCase() === action.value.toLowerCase() ||
-            opt.text.toLowerCase().includes(action.value.toLowerCase())
-          ) {
-            el.selectedIndex = i;
-            matched = true;
-            break;
-          }
+        if (el instanceof HTMLSelectElement) {
+          matched = await selectNativeOption(el, action.value);
+        } else {
+          matched = await selectCustomOption(el, action.value);
         }
 
-        if (!matched && el.options.length > 0) {
-          el.value = action.value;
-        }
-
-        el.dispatchEvent(new Event("change", { bubbles: true }));
         const settle = await waitForPageSettle(600);
+        const verification = verifyActionResult(action);
+        const ok = matched && verification.verified;
         return {
-          success: true,
+          success: ok,
           action,
+          error: ok ? undefined : verification.error || `Could not select "${action.value}".`,
           settled: settle.settled,
           waitedMs: settle.waitedMs,
+          verified: verification.verified,
+          observedValue: verification.observedValue,
         };
       }
 
@@ -247,6 +379,7 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
           action,
           settled: settle.settled,
           waitedMs: settle.waitedMs,
+          verified: true,
         };
       }
 
@@ -260,7 +393,7 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
         target.dispatchEvent(new KeyboardEvent("keypress", eventInit));
         target.dispatchEvent(new KeyboardEvent("keyup", eventInit));
         const settle = await waitForPageSettle(500);
-        return { success: true, action, settled: settle.settled, waitedMs: settle.waitedMs };
+        return { success: true, action, settled: settle.settled, waitedMs: settle.waitedMs, verified: true };
       }
 
       case "navigate": {
@@ -279,16 +412,19 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
           action,
           settled: false,
           waitedMs: 0,
+          verified: true,
         };
       }
 
       case "ask_user":
       case "done":
+      case "handoff_to_user":
         return {
           success: true,
           action,
           settled: true,
           waitedMs: 0,
+          verified: true,
         };
 
       default:

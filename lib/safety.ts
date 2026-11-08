@@ -18,6 +18,25 @@ import { isAllowedNavigationUrl, type PlannerAction } from "./schema.ts";
 import { hasVisiblePaymentForm } from "./payment-state.ts";
 import { classifyUserOnlyField, type UserOnlyCategory } from "./user-only.ts";
 
+/** Normalized control kinds used by form observation and filling. */
+export type FormControlKind =
+  | "text"
+  | "email"
+  | "tel"
+  | "number"
+  | "date"
+  | "password"
+  | "textarea"
+  | "select"
+  | "checkbox"
+  | "radio"
+  | "combobox"
+  | "listbox"
+  | "file"
+  | "contenteditable"
+  | "button"
+  | "other";
+
 export interface InteractiveElement {
   id: number;
   tag: string;
@@ -36,6 +55,20 @@ export interface InteractiveElement {
   isSensitive: boolean;
   sensitiveReason?: string;
   selector?: string;
+  /** Question / fieldset legend associated with this control when available. */
+  question?: string;
+  /** Normalized control family for form understanding. */
+  controlKind?: FormControlKind;
+  /** Radio / checkbox / ARIA group name when available. */
+  groupName?: string;
+  required?: boolean;
+  disabled?: boolean;
+  readOnly?: boolean;
+  /** Whether the control is currently visible and interactable. */
+  interactable?: boolean;
+  visible?: boolean;
+  /** True for contenteditable / ARIA textboxes that are not native inputs. */
+  contentEditable?: boolean;
 }
 
 export interface PageSnapshot {

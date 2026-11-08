@@ -6,13 +6,15 @@ import { answerAboutPage, buildPlannerPrompt } from "../lib/planner.ts";
 test("executor uses the native input/textarea setter before input and change events", async () => {
   const source = await readFile(new URL("../content/executor.ts", import.meta.url), "utf8");
   assert.match(source, /Object\.getOwnPropertyDescriptor\(prototype, "value"\)\?\.set/);
-  assert.match(source, /setNativeElementValue\(el, action\.text\)/);
+  assert.match(source, /setNativeElementValue\(el, (?:action\.text|text)\)/);
   assert.match(source, /dispatchEvent\(new InputEvent\("input"/);
   assert.match(source, /dispatchEvent\(new Event\("change"/);
   assert.match(source, /case "press_key"/);
   assert.match(source, /keydown/);
   assert.match(source, /keypress/);
   assert.match(source, /keyup/);
+  assert.match(source, /selectCustomOption/);
+  assert.match(source, /verifyActionResult/);
 });
 
 test("page questions use visible page context and planner prompts retain up to 30 controls", async () => {

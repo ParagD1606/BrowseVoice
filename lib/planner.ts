@@ -37,7 +37,16 @@ export interface PlannerRequest {
 export interface PlannerProvider {
   readonly id: string;
   readonly name: string;
+  /** True when this planner is the offline rule engine rather than an LLM. */
+  readonly isMock?: boolean;
   plan(request: PlannerRequest): Promise<PlannerAction>;
+}
+
+export class PlannerConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PlannerConfigurationError";
+  }
 }
 
 const HUGGINGFACE_ROUTER = "https://router.huggingface.co/v1";
@@ -859,6 +868,7 @@ export class GeminiPlanner implements PlannerProvider {
 export class MockRuleBasedPlanner implements PlannerProvider {
   readonly id = "mock";
   readonly name = "Mock / Rule-Based Planner (Demo & Tests)";
+  readonly isMock = true;
 
   public async plan(request: PlannerRequest): Promise<PlannerAction> {
     const latestUserRequest = [...(request.conversation || [])]
@@ -1014,28 +1024,89 @@ export class MockRuleBasedPlanner implements PlannerProvider {
       };
     }
 
+    const pageButtons = elements
+      .filter((el) => el.tag === "button" || el.role === "button")
+      .map((el) => el.label)
+      .filter(Boolean)
+      .slice(0, 3);
+
     return {
       action: "ask_user",
-      question: "What would you like to do? For example: check the electricity bill or pay the bill.",
-      options: ["Check the electricity bill", "Enter consumer number 100234567", "Pay the bill"],
-      rationale: "Asking the user for instructions.",
+      question: pageButtons.length
+        ? `Offline mock planner is active (not an LLM). What should I do next on this page? Visible actions include: ${pageButtons.join(", ")}.`
+        : "Offline mock planner is active (not an LLM). Tell me the next concrete step, or configure an LLM provider in Settings for intelligent planning.",
+      options: pageButtons.length ? pageButtons : ["Describe the next step"],
+      rationale: "Mock planner has no confident heuristic for this page.",
     };
   }
 }
 
+export interface CreatePlannerResult {
+  planner: PlannerProvider;
+  mode: "llm" | "mock";
+  degraded: boolean;
+  reason?: string;
+}
+
 /**
  * Factory creating the active planner provider based on configuration.
- * Supports: "gemini" (Google AI Studio), "openai-compatible", "mock".
+ * Supports: "gemini" (Google AI Studio), "openai-compatible", "huggingface", "mock".
+ *
+ * Never silently pretends mock planning is LLM planning when another provider
+ * was requested without a key — returns degraded metadata instead.
  */
-export function createPlanner(config: LLMConfig): PlannerProvider {
+export function createPlanner(config: LLMConfig, options?: { allowSilentMock?: boolean }): PlannerProvider {
+  return resolvePlanner(config, options).planner;
+}
+
+/** Preferred factory that makes mock / LLM mode explicit to callers. */
+export function resolvePlanner(config: LLMConfig, options?: { allowSilentMock?: boolean }): CreatePlannerResult {
+  if (config.provider === "mock") {
+    return { planner: new MockRuleBasedPlanner(), mode: "mock", degraded: false };
+  }
+
   if (config.provider === "gemini" && config.apiKey) {
-    return new GeminiPlanner(config);
+    return { planner: new GeminiPlanner(config), mode: "llm", degraded: false };
   }
   if (config.provider === "openai-compatible" && config.apiKey) {
-    return new OpenAICompatiblePlanner(config);
+    return { planner: new OpenAICompatiblePlanner(config), mode: "llm", degraded: false };
   }
   if (config.provider === "huggingface" && config.apiKey) {
-    return new OpenAICompatiblePlanner({ ...config, endpoint: HUGGINGFACE_ROUTER });
+    return {
+      planner: new OpenAICompatiblePlanner({ ...config, endpoint: HUGGINGFACE_ROUTER }),
+      mode: "llm",
+      degraded: false,
+    };
   }
-  return new MockRuleBasedPlanner();
+
+  const reason = `Provider "${config.provider}" was selected but no API key is configured.`;
+  if (options?.allowSilentMock === false) {
+    throw new PlannerConfigurationError(`${reason} Configure a key in Settings or switch provider to Mock.`);
+  }
+
+  return {
+    planner: new MockRuleBasedPlanner(),
+    mode: "mock",
+    degraded: true,
+    reason: `${reason} Using offline mock planner — this is not intelligent LLM planning.`,
+  };
+}
+
+/** Describe the active planner for UI status chips. */
+export function describePlannerMode(config: LLMConfig): { label: string; mode: "llm" | "mock"; degraded: boolean } {
+  if (config.provider === "mock") {
+    return { label: "Offline mock engine", mode: "mock", degraded: false };
+  }
+  if (!config.apiKey) {
+    return {
+      label: `Mock fallback (no ${config.provider} key)`,
+      mode: "mock",
+      degraded: true,
+    };
+  }
+  return {
+    label: `${config.model || config.provider} engine`,
+    mode: "llm",
+    degraded: false,
+  };
 }
