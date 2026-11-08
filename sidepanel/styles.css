@@ -517,6 +517,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .task-guidance-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .task-guidance-button { padding: 5px 8px; color: #dceaff; border: 1px solid rgba(114,170,255,.35); border-radius: 7px; background: rgba(76,140,240,.14); font-size: 10px; }
 .task-guidance-button:hover { border-color: var(--blue); background: rgba(76,140,240,.25); }
+.global-guidance { margin: 0 14px 10px; }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
 /* Command-center visual pass inspired by the supplied reference. */

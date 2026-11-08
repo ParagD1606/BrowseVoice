@@ -105,7 +105,7 @@ export function buildGuidance(reason: GuidanceReason, context: GuidanceContext =
         title: title("I am stuck and paused", "मैं अटक गया हूँ और रुक गया हूँ"),
         whatHappened: line(`I tried ${context.tried?.join(", ") || "the last actions"}, but the page did not move.`, `मैंने ${context.tried?.join(", ") || "पिछली कार्रवाइयाँ"} कीं, लेकिन पेज नहीं बदला।`),
         whatToDo: [
-          line(`I currently see ${context.pageTitle || "the current page"}.`, `अभी मुझे ${context.pageTitle || "वर्तमान पेज"} दिख रहा है।`),
+          line(`I currently see ${context.pageTitle || "the current page"}. ${context.pageSummary || "The page summary is unavailable."}`, `अभी मुझे ${context.pageTitle || "वर्तमान पेज"} दिख रहा है। ${context.pageSummary || "पेज का सार उपलब्ध नहीं है।"}`),
           line("Scroll down, tell me which button to click, or open the right page yourself and say continue.", "नीचे स्क्रॉल करें, बताएं किस बटन पर क्लिक करना है, या सही पेज खुद खोलकर continue कहें।"),
         ],
         actions: [action(context, "Continue", "जारी रखें", "resume"), action(context, "Retry", "फिर कोशिश करें", "retry")],
@@ -114,16 +114,22 @@ export function buildGuidance(reason: GuidanceReason, context: GuidanceContext =
       return {
         reason,
         title: title("The page changed while I was acting", "कार्रवाई के दौरान पेज बदल गया"),
-        whatHappened: line("The target control is no longer where I saw it.", "जिस नियंत्रण को मैंने देखा था वह अब वहाँ नहीं है।"),
-        whatToDo: [line("Refresh the page or open the correct page, then continue.", "पेज रीफ़्रेश करें या सही पेज खोलें, फिर continue कहें।")],
+        whatHappened: line(`The target control is no longer where I saw it. I tried ${context.tried?.join(", ") || "the last action"}.`, `जिस नियंत्रण को मैंने देखा था वह अब वहाँ नहीं है। मैंने ${context.tried?.join(", ") || "पिछली कार्रवाई"} की।`),
+        whatToDo: [
+          line(`I currently see ${context.pageTitle || "the current page"}. ${context.pageSummary || "The page summary is unavailable."}`, `अभी मुझे ${context.pageTitle || "वर्तमान पेज"} दिख रहा है। ${context.pageSummary || "पेज का सार उपलब्ध नहीं है।"}`),
+          line("Refresh the page or open the correct page, then continue.", "पेज रीफ़्रेश करें या सही पेज खोलें, फिर continue कहें।"),
+        ],
         actions: [action(context, "Retry", "फिर कोशिश करें", "retry"), action(context, "Continue", "जारी रखें", "resume")],
       };
     case "action_failed":
       return {
         reason,
         title: title("That action did not complete", "वह कार्रवाई पूरी नहीं हुई"),
-        whatHappened: context.error || line("The page rejected the action.", "पेज ने कार्रवाई स्वीकार नहीं की।"),
-        whatToDo: [line("Check the page and try again, or tell me the next button.", "पेज जाँचें और फिर कोशिश करें, या अगला बटन बताएं।")],
+        whatHappened: `${context.error || line("The page rejected the action.", "पेज ने कार्रवाई स्वीकार नहीं की।")} ${context.tried?.length ? line(`I tried ${context.tried.join(", ")}.`, `मैंने ${context.tried.join(", ")} की।`) : ""}`.trim(),
+        whatToDo: [
+          line(`I currently see ${context.pageTitle || "the current page"}. ${context.pageSummary || "The page summary is unavailable."}`, `अभी मुझे ${context.pageTitle || "वर्तमान पेज"} दिख रहा है। ${context.pageSummary || "पेज का सार उपलब्ध नहीं है।"}`),
+          line("Check the page and try again, or tell me the next button.", "पेज जाँचें और फिर कोशिश करें, या अगला बटन बताएं।"),
+        ],
         actions: commonRetry,
       };
     case "navigation_blocked":

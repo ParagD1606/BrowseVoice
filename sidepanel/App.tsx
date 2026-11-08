@@ -468,6 +468,7 @@ export const App: React.FC = () => {
   const [pendingConfirmationAction, setPendingConfirmationAction] = useState<PlannerAction | null>(null);
   const [confirmationMessage, setConfirmationMessage] = useState<string>("");
   const [taskCards, setTaskCards] = useState<TaskCardState[]>([]);
+  const [globalGuidance, setGlobalGuidance] = useState<Guidance | null>(null);
   const [activeConfirmationTaskId, setActiveConfirmationTaskId] = useState<string | null>(null);
   const [activeQuestionTaskId, setActiveQuestionTaskId] = useState<string | null>(null);
   const [questionAnswer, setQuestionAnswer] = useState("");
@@ -1743,12 +1744,20 @@ export const App: React.FC = () => {
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorName = error instanceof DOMException ? error.name : "";
       if (errorName === "NotAllowedError" || errorMessage.includes("Permission dismissed")) {
-        setStatusText(translate("Approve microphone access in the new tab", "नए टैब में माइक की अनुमति दें"));
+        const guidance = buildGuidance("mic_denied", { translate });
+        setGlobalGuidance(guidance);
+        setStatusText(guidance.title);
         setShowMicPermissionHelp(true);
       } else {
-        setStatusText(translate("Microphone access error", "माइक की अनुमति में त्रुटि"));
+        const guidance = buildGuidance("action_failed", { translate, error: errorMessage });
+        setGlobalGuidance(guidance);
+        setStatusText(guidance.title);
         alert(`Microphone error: ${errorMessage}`);
       }
+      const guidance = errorName === "NotAllowedError" || errorMessage.includes("Permission dismissed")
+        ? buildGuidance("mic_denied", { translate })
+        : buildGuidance("action_failed", { translate, error: errorMessage });
+      await speakStatus(`${guidance.title}. ${guidance.whatToDo[0] || ""}`.trim());
     }
   };
 
@@ -1989,6 +1998,28 @@ export const App: React.FC = () => {
             <span>{settings.llmProvider === "mock" ? "Offline engine" : `${settings.llmModel || "AI"} engine`}</span>
           </div>
         </div>
+
+        {globalGuidance && (
+          <div className="task-guidance global-guidance" role="status">
+            <strong>{globalGuidance.title}</strong>
+            <p>{globalGuidance.whatHappened}</p>
+            <ul>{globalGuidance.whatToDo.slice(0, 3).map((instruction) => <li key={instruction}>{instruction}</li>)}</ul>
+            <div className="task-guidance-actions">
+              {globalGuidance.actions.map((guidanceAction) => (
+                <button
+                  key={`${guidanceAction.kind}-${guidanceAction.label}`}
+                  type="button"
+                  className="task-guidance-button"
+                  onClick={() => {
+                    if (guidanceAction.kind === "open_settings") setSettingsOpen(true);
+                    if (guidanceAction.kind === "dismiss") setGlobalGuidance(null);
+                    if (guidanceAction.kind === "retry") { setGlobalGuidance(null); void startVoiceListening(); }
+                  }}
+                >{guidanceAction.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {taskCards.length > 0 && (
           <section className="task-list-section" aria-label="Parallel tasks">

@@ -387,7 +387,12 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
         continue;
       }
       appendStep(context, { stepNumber, action, status: "failed", details: error, timestamp: Date.now() });
-      return await pauseWithGuidance(context, "action_failed", { error, tried: [describeAction(action)] }, "paused");
+      return await pauseWithGuidance(context, "action_failed", {
+        error,
+        tried: context.steps.slice(-3).map((step) => describeAction(step.action)).concat(describeAction(action)),
+        pageTitle: currentSnapshot.title,
+        pageSummary: currentSnapshot.summary.slice(0, 180),
+      }, "paused");
     }
 
     lastSuccessfulRepeatableAction = key;
