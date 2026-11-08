@@ -1,0 +1,12 @@
+{
+ "comp": "/home/parag/projects/gnani/BrowseVoice/promo/comp-features.html",
+ "fps": 10,
+ "size": [
+  1920,
+  1080
+ ],
+ "frames": 2200,
+ "seconds": 220,
+ "final": true,
+ "audio": true
+}
