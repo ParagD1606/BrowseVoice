@@ -283,11 +283,17 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
         (element.tag === "button" || element.role === "button") &&
         /continue.{0,30}payment|proceed.{0,20}pay|भुगतान.{0,20}(?:आगे|जारी)/i.test(element.label),
       );
-      action = continueToPayment && !hasVisiblePaymentForm(currentSnapshot)
-        ? { action: "click", id: continueToPayment.id, rationale: "Opening the payment page; payment is not complete yet." }
-        : { action: "ask_user", question: hasVisiblePaymentForm(currentSnapshot)
-          ? "भुगतान फ़ॉर्म खुला है। कार्ड, UPI या अन्य गोपनीय जानकारी आप स्वयं भरें। भुगतान करना हो तो राशि जाँचकर पुष्टि करें।"
-          : "अभी भुगतान की रसीद दिखाई नहीं दे रही है, इसलिए मैं भुगतान पूरा होने की पुष्टि नहीं कर सकता।", rationale: "भुगतान की पुष्टि के लिए रसीद दिखाई देनी चाहिए।" };
+      if (continueToPayment && !hasVisiblePaymentForm(currentSnapshot)) {
+        action = { action: "click", id: continueToPayment.id, rationale: "Opening the payment page; payment is not complete yet." };
+      } else {
+        return await pauseWithGuidance(context, "payment_incomplete", {
+          error: hasVisiblePaymentForm(currentSnapshot)
+            ? "The payment form is open, but no receipt is visible yet."
+            : "No successful payment receipt is visible yet.",
+          pageTitle: currentSnapshot.title,
+          pageSummary: currentSnapshot.summary.slice(0, 180),
+        }, "waiting_user");
+      }
     }
 
     const key = repeatableActionKey(action);
