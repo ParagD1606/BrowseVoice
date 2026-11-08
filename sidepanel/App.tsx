@@ -722,28 +722,23 @@ export const App: React.FC = () => {
    */
   const speakStatus = async (text: string, languageCode = resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript)) => {
     if (isStoppedRef.current || !text) return;
-    setStatus("speaking");
-    setStatusText(text);
+    const queuedSpeech = ttsQueueRef.current.catch(() => {}).then(async () => {
+      if (isStoppedRef.current) return;
+      setStatus("speaking");
+      setStatusText(text);
 
-    const gnaniConfig: GnaniConfig = {
-      apiKey: settings.gnaniApiKey,
-      languageCode,
-      ttsVoice: "Nalini",
-      ttsModel: "timbre-v2.5",
-    };
+      const gnaniConfig: GnaniConfig = {
+        apiKey: settings.gnaniApiKey,
+        languageCode,
+        ttsVoice: "Nalini",
+        ttsModel: "timbre-v2.5",
+      };
 
-    await speakWithTimbre(text, gnaniConfig);
-    if (!isStoppedRef.current) {
-      setStatus("idle");
-    }
-  };
-
-  const getActionOutcomeSpeech = (action: PlannerAction, snapshot: PageSnapshot): string => {
-    const languageCode = resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || "");
-    if (["click", "type", "select", "scroll", "navigate"].includes(action.action)) {
-      return localizedActionSpeech(action, snapshot, languageCode);
-    }
-    return action.action === "done" ? action.summary : action.action === "ask_user" ? action.question : "Action completed.";
+      await speakWithTimbre(text, gnaniConfig);
+      if (!isStoppedRef.current) setStatus("idle");
+    });
+    ttsQueueRef.current = queuedSpeech.catch(() => {});
+    await queuedSpeech;
   };
 
   const askNextFormField = async () => {
@@ -1409,7 +1404,91 @@ export const App: React.FC = () => {
     await Promise.allSettled(Array.from({ length: Math.min(settings.taskConcurrency, tasks.length) }, () => worker()));
   };
 
+  // Keep the multi-tab orchestration separate from the legacy single-tab loop
+  // below. This lets existing form-follow-up behavior remain available while
+  // all new commands use isolated task runners.
+  const runParallelTask = async (initialRequest: string, resumeExistingTask = false) => {
+    if (!resumeExistingTask && snips.length > 0) {
+      await answerFromSnips(initialRequest);
+      return;
+    }
+    if (!activeTabId) {
+      alert("No active browser tab found.");
+      return;
+    }
+
+    isStoppedRef.current = false;
+    if (!resumeExistingTask) {
+      formFillRef.current = null;
+      taskGoalRef.current = null;
+      conversationRef.current = [];
+      awaitingUserReplyRef.current = false;
+    }
+    const tasks = await decomposeWithRetry(initialRequest);
+    if (isStoppedRef.current) return;
+    const generation = ++taskRunGenerationRef.current;
+    summarySpokenGenerationRef.current = 0;
+    taskViewsRef.current.clear();
+    taskContextsRef.current.clear();
+    confirmationQueueRef.current = [];
+    setActiveConfirmationTaskId(null);
+    setPendingConfirmationAction(null);
+    setConfirmationMessage("");
+    activeTaskIdsRef.current = tasks.map((task) => task.id);
+    const queuedTasks = tasks.map((task) => ({ id: task.id, label: task.label, tabId: null, tabTitle: "", status: "queued" as const, currentStep: translate("Queued", "कतार में"), steps: [] }));
+    setTaskCards(queuedTasks);
+    taskViewsRef.current = new Map(queuedTasks.map((task) => [task.id, task]));
+    setSteps([]);
+    setStatus("thinking");
+    setStatusText(decompositionNoticeRef.current || (tasks.length > 1 ? translate("Opening task tabs...", "काम के टैब खोल रहे हैं...") : translate("Analyzing page...", "पेज का विश्लेषण हो रहा है...")));
+
+    const tabAssignments: Array<{ task: SubTask; tabId: number }> = [];
+    try {
+      if (tasks.length === 1) {
+        const task = tasks[0];
+        const tabInfo = await chrome.tabs.get(activeTabId);
+        const tabId = activeTabId;
+        if (task.startUrl && (isRestrictedPage(tabInfo.url) || /\b(?:open|go|navigate|visit|kholo|खोलो)\b/i.test(initialRequest))) {
+          await chrome.tabs.update(tabId, { url: task.startUrl });
+          await waitForTabLoad(tabId);
+        } else if (isRestrictedPage(tabInfo.url)) {
+          const directUrl = resolveDirectNavigationIntent(initialRequest);
+          if (!directUrl) throw new Error("Please open a normal webpage before starting this task.");
+          await chrome.tabs.update(tabId, { url: directUrl });
+          await waitForTabLoad(tabId);
+        }
+        tabAssignments.push({ task, tabId });
+      } else {
+        for (const task of tasks) {
+          const tab = await chrome.tabs.create({ url: task.startUrl || "https://www.google.com", active: false });
+          if (!tab.id) throw new Error(`Could not create a tab for ${task.label}.`);
+          await waitForTabLoad(tab.id);
+          const connected = await chrome.runtime.sendMessage({ type: "BV_ENSURE_TAB_CONNECTED", tabId: tab.id });
+          if (!connected?.ok) throw new Error(`Could not connect Browse Voice to the ${task.label} tab.`);
+          tabAssignments.push({ task, tabId: tab.id });
+          publishTaskCard(task.id, { tabId: tab.id, tabTitle: tab.title || task.label, faviconUrl: tab.favIconUrl });
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not prepare task tabs.";
+      setStatus("idle");
+      setStatusText(message);
+      for (const task of tasks.filter((item) => !tabAssignments.some((assigned) => assigned.task.id === item.id))) publishTaskCard(task.id, { status: "failed", error: message, currentStep: message });
+      return;
+    }
+
+    if (generation !== taskRunGenerationRef.current) return;
+    for (const assignment of tabAssignments) {
+      const tab = await chrome.tabs.get(assignment.tabId);
+      publishTaskCard(assignment.task.id, { tabId: assignment.tabId, tabTitle: tab.title || assignment.task.label, faviconUrl: tab.favIconUrl });
+    }
+    await runTasksWithLimit(tabAssignments);
+    await maybeSpeakCombinedSummary();
+  };
+
   const startTaskRun = async (initialRequest: string, resumeExistingTask = false) => {
+    return runParallelTask(initialRequest, resumeExistingTask);
+    /* Legacy single-tab loop retained below for reference during the merge.
     if (!resumeExistingTask && snips.length > 0) {
       await answerFromSnips(initialRequest);
       return;
@@ -1456,7 +1535,7 @@ export const App: React.FC = () => {
           timestamp: Date.now(),
         }]);
         await chrome.tabs.update(activeTabId, { url: directUrl });
-        await speakStatus(navAction.rationale);
+        await speakStatus(navAction.rationale || "Opened the requested page.");
         setStatus("idle");
         setStatusText(translate("Navigated", "पेज खुल गया है"));
         return;
@@ -1609,10 +1688,7 @@ export const App: React.FC = () => {
       }
 
       // SUBMIT / PAYMENT CONFIRMATION GATING
-      const userExplicitlyConfirmedAction =
-        isPaymentIntent(taskGoal) &&
-        /\bconfirm(?:ed)?\b|पुष्टि|कन्फर्म/i.test(initialRequest);
-      if (safety.requiresConfirmation && !userExplicitlyConfirmedAction) {
+      if (safety.requiresConfirmation) {
         setStatus("confirmation");
         const confirmSpeech = safety.safetyAlertSpeech || "Do you want to confirm this action? Say yes to continue.";
         setStatusText(translate("Waiting for confirmation", "पुष्टि की प्रतीक्षा है"));
@@ -1747,10 +1823,12 @@ export const App: React.FC = () => {
     }
   };
 
+    */
+  };
   /**
    * Resumes the loop after the user gives confirmation for submit/payment
    */
-  const confirmAndResumeAction = async () => {
+  /* const confirmAndResumeAction = async () => {
     if (!pendingConfirmationAction || !activeTabId) return;
     const actionToRun = pendingConfirmationAction;
     setPendingConfirmationAction(null);
@@ -1802,13 +1880,14 @@ export const App: React.FC = () => {
     };
     const confirmationCopy = paymentConfirmations[paymentLanguage] || paymentConfirmations["en-IN"];
     const actionSummary = paymentReceiptVisible ? confirmationCopy.receipt : confirmationCopy.continued;
-    const nextSteps = [...stepsRef.current, {
+    const nextStep: StepLogEntry = {
       stepNumber: stepsRef.current.length + 1,
       action: actionToRun,
       status: "success",
       spokenSummary: actionSummary,
       timestamp: Date.now(),
-    }];
+    };
+    const nextSteps = [...stepsRef.current, nextStep];
     stepsRef.current = nextSteps;
     setSteps(nextSteps);
 
@@ -1820,67 +1899,15 @@ export const App: React.FC = () => {
       conversationRef.current = [];
       awaitingUserReplyRef.current = false;
     }
-    const tasks = await decomposeWithRetry(initialRequest);
-    if (isStoppedRef.current) return;
-    const generation = ++taskRunGenerationRef.current;
-    summarySpokenGenerationRef.current = 0;
-    taskViewsRef.current.clear();
-    taskContextsRef.current.clear();
-    confirmationQueueRef.current = [];
-    setActiveConfirmationTaskId(null);
-    setPendingConfirmationAction(null);
-    setConfirmationMessage("");
-    activeTaskIdsRef.current = tasks.map((task) => task.id);
-    setTaskCards(tasks.map((task) => ({ id: task.id, label: task.label, tabId: null, tabTitle: "", status: "queued", currentStep: translate("Queued", "कतार में"), steps: [] })));
-    taskViewsRef.current = new Map(tasks.map((task) => [task.id, { id: task.id, label: task.label, tabId: null, tabTitle: "", status: "queued", currentStep: translate("Queued", "कतार में"), steps: [] }]));
-    setSteps([]);
+    conversationRef.current = [...conversationRef.current, {
+      role: "assistant" as const,
+      content: "The confirmed action ran, but no payment receipt is visible yet. Continue by inspecting the current page; do not report payment as complete.",
+    }].slice(-6);
     setStatus("thinking");
-    setStatusText(decompositionNoticeRef.current || (tasks.length > 1 ? translate("Opening task tabs...", "काम के टैब खोल रहे हैं...") : translate("Analyzing page...", "पेज का विश्लेषण हो रहा है...")));
-
-    const tabAssignments: Array<{ task: SubTask; tabId: number }> = [];
-    try {
-      if (tasks.length === 1) {
-        const task = tasks[0];
-        const tabInfo = await chrome.tabs.get(activeTabId);
-        let tabId = activeTabId;
-        if (task.startUrl && (isRestrictedPage(tabInfo.url) || /\b(?:open|go|navigate|visit|kholo|खोलो)\b/i.test(initialRequest))) {
-          await chrome.tabs.update(tabId, { url: task.startUrl });
-          await waitForTabLoad(tabId);
-        } else if (isRestrictedPage(tabInfo.url)) {
-          const directUrl = resolveDirectNavigationIntent(initialRequest);
-          if (!directUrl) throw new Error("Please open a normal webpage before starting this task.");
-          await chrome.tabs.update(tabId, { url: directUrl });
-          await waitForTabLoad(tabId);
-        }
-        tabAssignments.push({ task, tabId });
-      } else {
-        for (const task of tasks) {
-          // Unknown sites are planner-resolved after the tab has a real page.
-          const tab = await chrome.tabs.create({ url: task.startUrl || "https://www.google.com", active: false });
-          if (!tab.id) throw new Error(`Could not create a tab for ${task.label}.`);
-          await waitForTabLoad(tab.id);
-          const connected = await chrome.runtime.sendMessage({ type: "BV_ENSURE_TAB_CONNECTED", tabId: tab.id });
-          if (!connected?.ok) throw new Error(`Could not connect Browse Voice to the ${task.label} tab.`);
-          tabAssignments.push({ task, tabId: tab.id });
-          publishTaskCard(task.id, { tabId: tab.id, tabTitle: tab.title || task.label, faviconUrl: tab.favIconUrl });
-        }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not prepare task tabs.";
-      setStatus("idle");
-      setStatusText(message);
-      for (const task of tasks.filter((item) => !tabAssignments.some((assigned) => assigned.task.id === item.id))) publishTaskCard(task.id, { status: "failed", error: message, currentStep: message });
-      return;
-    }
-
-    if (generation !== taskRunGenerationRef.current) return;
-    for (const assignment of tabAssignments) {
-      const tab = await chrome.tabs.get(assignment.tabId);
-      publishTaskCard(assignment.task.id, { tabId: assignment.tabId, tabTitle: tab.title || assignment.task.label, faviconUrl: tab.favIconUrl });
-    }
-    await runTasksWithLimit(tabAssignments);
-    await maybeSpeakCombinedSummary();
-  };
+    setStatusText(translate("Checking the next step...", "अगला कदम देख रहे हैं..."));
+    awaitingUserReplyRef.current = true;
+    await runAgentLoop("", true);
+  }; */
 
   const runAgentLoop = async (initialRequest: string, resumeExistingTask = false) => startTaskRun(initialRequest, resumeExistingTask);
 
