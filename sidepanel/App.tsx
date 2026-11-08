@@ -1649,6 +1649,10 @@ export const App: React.FC = () => {
       return;
     }
     if (!context) return;
+    if (context.pendingQuestion) {
+      enqueueQuestion(taskId);
+      return;
+    }
     const result = await resumeAgentTask(context, true, guidanceAction.kind === "retry" ? "retry" : "continue");
     publishTaskResult(taskId, result);
     await maybeSpeakCombinedSummary();

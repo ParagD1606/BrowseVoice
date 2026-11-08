@@ -545,7 +545,7 @@ RULES:
    - {"action": "click", "id": <number>, "rationale": "<short rationale>"}
    - {"action": "type", "id": <number>, "text": "<value>", "rationale": "<short rationale>"}
    - {"action": "select", "id": <number>, "value": "<option>", "rationale": "<short rationale>"}
-   - {"action": "press_key", "key": "Enter", "rationale": "<short rationale>"}
+   - {"action": "press_key", "key": "Enter"|"Tab"|"Escape", "rationale": "<short rationale>"}
    - {"action": "scroll", "direction": "up"|"down"|"left"|"right", "amount": 300, "rationale": "<short rationale>"}
    - {"action": "navigate", "url": "<valid url>", "rationale": "<short rationale>"}
    - {"action": "ask_user", "question": "<question in user's language>", "options": ["opt1", "opt2"], "rationale": "<short rationale>"}
@@ -557,7 +557,8 @@ RULES:
 5. If the user's goal is accomplished on the current screen, return action "done".
    For payment tasks, NEVER claim payment is complete unless the currently visible page shows a successful payment receipt with a transaction ID. A payment form or a "continue to payment" page is not completion.
    Never click, read, or fill card, CVV, OTP, password, or other sensitive payment fields. Ask the user to handle those fields manually.
-6. Output raw JSON only with NO markdown wrappers or extra commentary.`;
+6. If you cannot make progress in 2 steps, return ask_user with ONE specific question or instruction for the user. Never repeat an action that already succeeded or failed. Prefer scroll or ask_user over guessing.
+7. Output raw JSON only with NO markdown wrappers or extra commentary.`;
 
 /**
  * LLM Provider communicating with OpenAI / OpenRouter / DeepSeek / Groq compatible APIs.

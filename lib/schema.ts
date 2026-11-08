@@ -53,7 +53,7 @@ export interface SelectAction {
 
 export interface PressKeyAction {
   action: "press_key";
-  key: string;
+  key: "Enter" | "Tab" | "Escape";
   rationale?: string;
 }
 
@@ -310,10 +310,10 @@ export function validatePlannerAction(input: unknown): ValidationResult {
     }
 
     case "press_key": {
-      if (typeof raw.key !== "string" || !raw.key.trim() || raw.key.trim().length > 40) {
-        return { valid: false, error: "action 'press_key' requires a non-empty 'key' of at most 40 characters." };
+      if (raw.key !== "Enter" && raw.key !== "Tab" && raw.key !== "Escape") {
+        return { valid: false, error: "action 'press_key' requires key 'Enter', 'Tab', or 'Escape'." };
       }
-      return { valid: true, action: { action: "press_key", key: raw.key.trim(), rationale } };
+      return { valid: true, action: { action: "press_key", key: raw.key, rationale } };
     }
 
     case "navigate": {

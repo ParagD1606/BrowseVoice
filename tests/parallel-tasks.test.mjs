@@ -116,6 +116,7 @@ test("navigation guard rejects javascript, file, and chrome URLs", () => {
 test("press_key is a validated planner action and is included in the planner prompt", () => {
   const action = validatePlannerAction({ action: "press_key", key: "Enter" });
   assert.equal(action.valid, true);
+  assert.equal(validatePlannerAction({ action: "press_key", key: "Delete" }).valid, false);
   assert.match(PLANNER_SYSTEM_PROMPT, /press_key/);
 });
 
