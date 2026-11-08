@@ -304,12 +304,12 @@ test("payment completion recognizes generic visible receipt evidence", () => {
   assert.equal(hasPaymentReceipt("Payment Gateway | Payment Successful | Visible payment receipt: Transaction ID present."), true);
 });
 
-test("form editing instructions do not require a payment receipt", () => {
-  for (const request of ["fill the checkout form", "complete the payment form", "edit the checkout form"]) {
-    assert.equal(isPaymentIntent(request), false, request);
-  }
-  for (const request of ["pay now", "buy this", "place order"]) {
+test("payment intent distinguishes form editing from payment completion", () => {
+  for (const request of ["complete payment", "complete the payment", "make the payment", "pay now", "buy a laptop", "place order", "भुगतान करो"]) {
     assert.equal(isPaymentIntent(request), true, request);
+  }
+  for (const request of ["fill the checkout form", "edit the payment form", "check electricity bill"]) {
+    assert.equal(isPaymentIntent(request), false, request);
   }
 });
 
