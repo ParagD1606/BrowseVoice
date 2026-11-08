@@ -166,7 +166,7 @@ test("malformed decomposition JSON falls back to one task and preserves the orig
   }
 });
 
-test("runner retries stale element snapshots up to three times and resets after success", async () => {
+test("runner retries stale elements three times, then pauses with guidance", async () => {
   let plans = 0;
   let staleFailures = 0;
   const planner = {
@@ -190,7 +190,8 @@ test("runner retries stale element snapshots up to three times and resets after 
   };
   const context = createTaskRunnerContext({ tabId: 9, goal: "click then finish", planner, sendTabMessage: send });
   const result = await runAgentTask(context);
-  assert.equal(result.status, "done");
+  assert.equal(result.status, "paused");
+  assert.equal(result.context.guidance?.reason, "stale_element");
   assert.equal(staleFailures, 3);
 });
 

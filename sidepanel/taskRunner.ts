@@ -7,12 +7,15 @@ import {
 import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "../lib/payment-state.ts";
 import { inspectActionSafety, type PageSnapshot } from "../lib/safety.ts";
 import { validatePlannerAction, type PlannerAction } from "../lib/schema.ts";
+import { buildGuidance, type Guidance, type GuidanceReason } from "../lib/guidance.ts";
 
 export type TaskRunnerStatus =
   | "queued"
   | "running"
   | "waiting_confirmation"
   | "waiting_question"
+  | "waiting_user"
+  | "paused"
   | "blocked"
   | "done"
   | "failed"
@@ -30,20 +33,30 @@ export interface TaskRunnerCallbacks {
   onStep?: (entry: StepLogEntry) => void;
   onPrompt?: (text: string, kind: "confirmation" | "blocked" | "question") => Promise<void> | void;
   onRateLimited?: (attempt: number, retryAfterMs: number) => void;
+  onGuidance?: (guidance: Guidance) => Promise<void> | void;
 }
 
 export interface TaskRunnerContext {
   readonly tabId: number;
   readonly goal: string;
   readonly planner: PlannerProvider;
-  readonly maxSteps: number;
+  maxSteps: number;
+  readonly hardMaxSteps: number;
   readonly controller: AbortController;
   steps: StepLogEntry[];
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
   pendingConfirmation: PendingTaskConfirmation | null;
   pendingQuestion: string | null;
+  pendingQuestionOptions: string[];
+  guidance: Guidance | null;
+  unchangedFingerprintCount: number;
+  staleElementRetries: number;
+  failedActionCounts: Map<string, number>;
+  recentActionKeys: string[];
+  lastFingerprint: string | null;
   stopRequested: boolean;
   callbacks?: TaskRunnerCallbacks;
+  translate?: (english: string, hindi: string) => string;
   sendTabMessage: <T>(tabId: number, message: Record<string, unknown>) => Promise<T>;
 }
 
@@ -62,16 +75,25 @@ interface ExecutionResponse {
 }
 
 export function createTaskRunnerContext(
-  input: Omit<TaskRunnerContext, "controller" | "steps" | "conversation" | "pendingConfirmation" | "pendingQuestion" | "stopRequested" | "maxSteps"> & { maxSteps?: number },
+  input: Omit<TaskRunnerContext, "controller" | "steps" | "conversation" | "pendingConfirmation" | "pendingQuestion" | "pendingQuestionOptions" | "guidance" | "unchangedFingerprintCount" | "staleElementRetries" | "failedActionCounts" | "recentActionKeys" | "lastFingerprint" | "stopRequested" | "maxSteps" | "hardMaxSteps"> & { maxSteps?: number; hardMaxSteps?: number },
 ): TaskRunnerContext {
+  const maxSteps = input.maxSteps ?? 15;
   return {
     ...input,
-    maxSteps: input.maxSteps ?? 15,
+    maxSteps,
+    hardMaxSteps: input.hardMaxSteps ?? 45,
     controller: new AbortController(),
     steps: [],
     conversation: [{ role: "user", content: input.goal }],
     pendingConfirmation: null,
     pendingQuestion: null,
+    pendingQuestionOptions: [],
+    guidance: null,
+    unchangedFingerprintCount: 0,
+    staleElementRetries: 0,
+    failedActionCounts: new Map(),
+    recentActionKeys: [],
+    lastFingerprint: null,
     stopRequested: false,
   };
 }
@@ -81,6 +103,12 @@ export function stopAgentTask(context: TaskRunnerContext): void {
   context.controller.abort();
   context.pendingConfirmation = null;
   context.pendingQuestion = null;
+  context.pendingQuestionOptions = [];
+  context.guidance = null;
+  context.pendingQuestionOptions = [];
+  const guidance = buildGuidance("stopped", { translate: context.translate });
+  context.guidance = guidance;
+  void context.callbacks?.onGuidance?.(guidance);
   context.callbacks?.onStatus?.("stopped", "Task stopped");
 }
 
@@ -94,6 +122,24 @@ function isAborted(context: TaskRunnerContext): boolean {
 
 function emitStatus(context: TaskRunnerContext, status: TaskRunnerStatus, text: string): void {
   context.callbacks?.onStatus?.(status, text);
+}
+
+function guidanceContext(context: TaskRunnerContext, extra: Record<string, unknown> = {}) {
+  return { taskLabel: context.goal.slice(0, 80), translate: context.translate, ...extra };
+}
+
+async function pauseWithGuidance(context: TaskRunnerContext, reason: GuidanceReason, extra: Record<string, unknown> = {}, status: TaskRunnerStatus = "paused"): Promise<TaskRunnerResult> {
+  const guidance = buildGuidance(reason, guidanceContext(context, extra));
+  context.guidance = guidance;
+  emitStatus(context, status, guidance.title);
+  await context.callbacks?.onGuidance?.(guidance);
+  return { status, error: guidance.whatHappened, context };
+}
+
+export function applyTaskGuidance(context: TaskRunnerContext, guidance: Guidance, status: TaskRunnerStatus = "paused"): void {
+  context.guidance = guidance;
+  emitStatus(context, status, guidance.title);
+  void context.callbacks?.onGuidance?.(guidance);
 }
 
 function appendStep(context: TaskRunnerContext, entry: StepLogEntry): void {
@@ -118,6 +164,51 @@ function repeatableActionKey(action: PlannerAction): string | null {
   if (action.action === "click") return `click:${action.id}`;
   if (action.action === "navigate") return `navigate:${action.url.trim().replace(/\/$/, "")}`;
   return null;
+}
+
+function actionKey(action: PlannerAction): string {
+  return JSON.stringify(action);
+}
+
+function hashFingerprint(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function snapshotFingerprint(snapshot: PageSnapshot): string {
+  const controls = snapshot.interactiveElements.map((element) => `${element.id}:${element.label}:${element.role}`).join("|");
+  return hashFingerprint(`${snapshot.url}|${snapshot.summary}|${controls}`);
+}
+
+function isContinueCommand(text: string): boolean {
+  return /^(?:done|ho\s*gaya|ho\s*gya|kar\s*diya|bhar\s*diya|continue|aage\s*badho|ok\s*done|हो\s*गया|आगे\s*बढ़ो)$/i.test(text.trim());
+}
+
+function describeAction(action: PlannerAction): string {
+  if (action.action === "click") return `click ${action.id}`;
+  if (action.action === "type") return `type into ${action.id}`;
+  if (action.action === "select") return `select ${action.value}`;
+  if (action.action === "navigate") return `open ${action.url}`;
+  if (action.action === "scroll") return `scroll ${action.direction}`;
+  if (action.action === "press_key") return `press ${action.key}`;
+  if (action.action === "ask_user") return "ask a question";
+  return "finish the task";
+}
+
+function isNetworkError(error: string): boolean {
+  return /network|fetch failed|failed to fetch|timed out|timeout|offline|connection/i.test(error);
+}
+
+function isInvalidApiKeyError(error: string): boolean {
+  return /401|403|invalid.*(?:api|key)|api.*key.*(?:invalid|rejected)|unauthorized/i.test(error);
+}
+
+function isStaleElementError(error: string): boolean {
+  return /element id \[\d+\] was not found in the current page/i.test(error);
 }
 
 async function delayWithAbort(context: TaskRunnerContext, delayMs: number): Promise<void> {
@@ -147,7 +238,14 @@ async function planWithRetry(context: TaskRunnerContext, snapshot: PageSnapshot)
       attempt += 1;
       const retryAfterMs = Math.max(250, getPlannerRetryAfterMs(error) ?? 500 * (2 ** (attempt - 1)));
       context.callbacks?.onRateLimited?.(attempt, retryAfterMs);
-      await delayWithAbort(context, retryAfterMs);
+      let remainingMs = retryAfterMs;
+      while (remainingMs > 0 && !isAborted(context)) {
+        const seconds = Math.max(1, Math.ceil(remainingMs / 1000));
+        emitStatus(context, "running", `Rate limited, retrying in ${seconds} s`);
+        const waitMs = Math.min(1000, remainingMs);
+        await delayWithAbort(context, waitMs);
+        remainingMs -= waitMs;
+      }
     }
   }
 }
@@ -169,7 +267,7 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
   let currentSnapshot = initialSnapshot || await fetchSnapshot(context);
   let lastSuccessfulRepeatableAction: string | null = null;
   let lastSkippedRepeatedAction: string | null = null;
-  let staleElementRetries = 0;
+  context.lastFingerprint = snapshotFingerprint(currentSnapshot);
 
   for (let stepNumber = context.steps.length + 1; stepNumber <= context.maxSteps; stepNumber += 1) {
     if (isAborted(context)) return { status: "stopped", context };
@@ -194,25 +292,34 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
 
     const key = repeatableActionKey(action);
     if (key && key === lastSuccessfulRepeatableAction) {
-      if (key === lastSkippedRepeatedAction) {
-        const message = "I already completed that action, so I stopped before repeating it again.";
-        emitStatus(context, "failed", message);
-        return { status: "failed", error: message, context };
-      }
+      const message = key === lastSkippedRepeatedAction
+        ? "I already completed that action twice."
+        : "I already completed that action and will not repeat it.";
       lastSkippedRepeatedAction = key;
-      context.conversation = [...context.conversation, { role: "assistant" as const, content: "I already completed that exact action. I will not repeat it." }].slice(-6);
-      currentSnapshot = await fetchSnapshot(context);
-      stepNumber -= 1;
-      continue;
+      context.conversation = [...context.conversation, { role: "assistant" as const, content: message }].slice(-6);
+      return await pauseWithGuidance(context, "repeated_action", {
+        tried: [describeAction(action)],
+        pageTitle: currentSnapshot.title,
+        pageSummary: currentSnapshot.summary.slice(0, 180),
+      });
     }
 
     const safety = inspectActionSafety(action, currentSnapshot);
     if (!safety.permitted) {
       const message = safety.safetyAlertSpeech || "This field contains sensitive information. Please fill it manually.";
       appendStep(context, { stepNumber, action, status: "blocked", spokenSummary: message, details: safety.reason, timestamp: Date.now() });
-      emitStatus(context, "blocked", message);
-      await context.callbacks?.onPrompt?.(message, "blocked");
-      return { status: "blocked", error: safety.reason, context };
+      if (action.action === "type" && safety.targetElement?.isSensitive) {
+        await context.sendTabMessage(context.tabId, {
+          type: "BV_HIGHLIGHT_MANUAL_FIELDS",
+          fields: [{ id: safety.targetElement.id, label: safety.targetElement.label, reason: safety.targetElement.sensitiveReason || "sensitive information" }],
+        }).catch(() => undefined);
+        return await pauseWithGuidance(context, "sensitive_field", {
+          fieldLabel: safety.targetElement.label,
+          fieldReason: safety.targetElement.sensitiveReason || "sensitive information",
+        }, "waiting_user");
+      }
+      const reason: GuidanceReason = /navigation/i.test(safety.reason || "") ? "navigation_blocked" : "action_failed";
+      return await pauseWithGuidance(context, reason, { error: safety.reason || message }, "blocked");
     }
 
     if (safety.requiresConfirmation) {
@@ -233,9 +340,10 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
 
     if (action.action === "ask_user") {
       context.pendingQuestion = action.question;
+      context.pendingQuestionOptions = action.options || [];
       context.conversation = [...context.conversation, { role: "assistant" as const, content: action.question }].slice(-6);
       appendStep(context, { stepNumber, action, status: "success", spokenSummary: action.question, timestamp: Date.now() });
-      emitStatus(context, "waiting_question", action.question);
+      await pauseWithGuidance(context, "question", { error: action.question }, "waiting_question");
       await context.callbacks?.onPrompt?.(action.question, "question");
       return { status: "waiting_question", context };
     }
@@ -250,29 +358,72 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
 
     if (!response?.ok || response.result?.success === false) {
       const error = response?.error || response?.result?.error || "Action execution failed.";
-      if (/element id \[\d+\] was not found in the current page/i.test(error) && staleElementRetries < 3) {
-        staleElementRetries += 1;
+      const failedKey = actionKey(action);
+      const failedCount = (context.failedActionCounts.get(failedKey) || 0) + 1;
+      context.failedActionCounts.set(failedKey, failedCount);
+      if (isStaleElementError(error)) {
+        context.staleElementRetries += 1;
+        if (context.staleElementRetries < 3) {
+          currentSnapshot = await fetchSnapshot(context);
+          stepNumber -= 1;
+          continue;
+        }
+        return await pauseWithGuidance(context, "stale_element", {
+          error,
+          tried: [describeAction(action)],
+          pageTitle: currentSnapshot.title,
+          pageSummary: currentSnapshot.summary.slice(0, 180),
+        });
+      }
+      if (failedCount < 2) {
         currentSnapshot = await fetchSnapshot(context);
         stepNumber -= 1;
         continue;
       }
       appendStep(context, { stepNumber, action, status: "failed", details: error, timestamp: Date.now() });
-      emitStatus(context, "failed", error);
-      return { status: "failed", error, context };
+      return await pauseWithGuidance(context, "action_failed", { error, tried: [describeAction(action)] }, "paused");
     }
 
     lastSuccessfulRepeatableAction = key;
     lastSkippedRepeatedAction = null;
-    staleElementRetries = 0;
+    context.staleElementRetries = 0;
+    context.failedActionCounts.delete(actionKey(action));
     const speech = outcomeSpeech(action, currentSnapshot);
     context.conversation = [...context.conversation, { role: "assistant" as const, content: speech }].slice(-6);
     appendStep(context, { stepNumber, action, status: "success", spokenSummary: speech, timestamp: Date.now() });
+    const beforeFingerprint = context.lastFingerprint;
     currentSnapshot = response.freshSnapshot || await fetchSnapshot(context);
+    const afterFingerprint = snapshotFingerprint(currentSnapshot);
+    context.recentActionKeys = [...context.recentActionKeys, actionKey(action)].slice(-4);
+    context.unchangedFingerprintCount = beforeFingerprint === afterFingerprint ? context.unchangedFingerprintCount + 1 : 0;
+    context.lastFingerprint = afterFingerprint;
+    const cycle = context.recentActionKeys.length === 4 &&
+      context.recentActionKeys[0] === context.recentActionKeys[2] &&
+      context.recentActionKeys[1] === context.recentActionKeys[3] &&
+      context.recentActionKeys[0] !== context.recentActionKeys[1];
+    if (cycle) {
+      return await pauseWithGuidance(context, "repeated_action", {
+        tried: context.steps.slice(-4).map((step) => describeAction(step.action)),
+        pageTitle: currentSnapshot.title,
+        pageSummary: currentSnapshot.summary.slice(0, 180),
+      });
+    }
+    if (context.unchangedFingerprintCount >= 2) {
+      return await pauseWithGuidance(context, "no_progress", {
+        tried: context.steps.slice(-3).map((step) => describeAction(step.action)),
+        pageTitle: currentSnapshot.title,
+        pageSummary: currentSnapshot.summary.slice(0, 180),
+      });
+    }
   }
 
-  const error = `The maximum of ${context.maxSteps} steps has been reached.`;
-  emitStatus(context, "failed", error);
-  return { status: "failed", error, context };
+  const completed = context.steps.filter((step) => step.status === "success").slice(-2).map((step) => step.spokenSummary || describeAction(step.action)).join("; ");
+  const hardCap = context.maxSteps >= context.hardMaxSteps;
+  return await pauseWithGuidance(context, "max_steps", {
+    completed: completed || "no step is confirmed",
+    remaining: context.goal,
+    error: hardCap ? "hard-cap" : undefined,
+  }, "paused");
 }
 
 export async function runAgentTask(context: TaskRunnerContext): Promise<TaskRunnerResult> {
@@ -284,10 +435,21 @@ export async function runAgentTask(context: TaskRunnerContext): Promise<TaskRunn
     await context.sendTabMessage(context.tabId, { type: "BV_ACTIVATE_AGENT", statusText: "Browse Voice active" });
     return await runLoop(context);
   } catch (error) {
-    if (isAborted(context)) return { status: "stopped", context };
+    if (isAborted(context)) {
+      const guidance = buildGuidance("stopped", { translate: context.translate });
+      applyTaskGuidance(context, guidance, "stopped");
+      return { status: "stopped", context };
+    }
     const message = error instanceof Error ? error.message : "Task failed.";
-    emitStatus(context, "failed", message);
-    return { status: "failed", error: message, context };
+    const reason: GuidanceReason = isPlannerRateLimitError(error)
+      ? "rate_limited"
+      : isInvalidApiKeyError(message)
+        ? "invalid_api_key"
+        : isNetworkError(message)
+          ? "network_error"
+          : /planner|schema|json/i.test(message) ? "planner_error" : "action_failed";
+    const result = await pauseWithGuidance(context, reason, { error: message }, "paused");
+    return { ...result, error: message };
   }
 }
 
@@ -298,8 +460,7 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
     context.pendingConfirmation = null;
     if (!confirmed) {
       const message = "The action was cancelled.";
-      emitStatus(context, "failed", message);
-      return { status: "failed", error: message, context };
+      return await pauseWithGuidance(context, "stopped", { error: message }, "failed");
     }
     try {
       emitStatus(context, "running", "Executing confirmed action");
@@ -317,20 +478,47 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
       return await runLoop(context, snapshot);
     } catch (error) {
       const message = error instanceof Error ? error.message : "The confirmed action could not be completed.";
-      emitStatus(context, "failed", message);
-      return { status: "failed", error: message, context };
+      const result = await pauseWithGuidance(context, "action_failed", { error: message }, "paused");
+      return { ...result, error: message };
     }
   }
 
   if (context.pendingQuestion) {
     if (!answer?.trim()) return { status: "waiting_question", context };
     context.pendingQuestion = null;
+    context.pendingQuestionOptions = [];
     context.conversation = [...context.conversation, { role: "user" as const, content: answer.trim() }].slice(-6);
     emitStatus(context, "running", "Continuing task");
     try { return await runLoop(context); } catch (error) {
       const message = error instanceof Error ? error.message : "Task failed.";
       emitStatus(context, "failed", message);
       return { status: "failed", error: message, context };
+    }
+  }
+
+  if (context.guidance) {
+    const hint = answer?.trim() || "";
+    if (!hint) return { status: "paused", context };
+    if (context.guidance.reason === "max_steps") {
+      if (context.maxSteps >= context.hardMaxSteps) return { status: "paused", context };
+      if (!confirmed && !isContinueCommand(hint) && hint.toLowerCase() !== "continue") return { status: "paused", context };
+      context.maxSteps = Math.min(context.hardMaxSteps, context.maxSteps + 15);
+    } else if (context.guidance.reason === "sensitive_field" && !isContinueCommand(hint)) {
+      return { status: "waiting_user", context };
+    }
+    context.conversation = [...context.conversation, { role: "user" as const, content: hint }].slice(-6);
+    context.guidance = null;
+    context.unchangedFingerprintCount = 0;
+    context.staleElementRetries = 0;
+    context.failedActionCounts.clear();
+    context.recentActionKeys = [];
+    try {
+      emitStatus(context, "running", "Continuing task");
+      return await runLoop(context, await fetchSnapshot(context));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Task failed.";
+      const result = await pauseWithGuidance(context, isNetworkError(message) ? "network_error" : "action_failed", { error: message }, "paused");
+      return { ...result, error: message };
     }
   }
   return await runAgentTask(context);

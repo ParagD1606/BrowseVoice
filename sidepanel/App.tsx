@@ -1764,6 +1764,8 @@ export const App: React.FC = () => {
       running: ["Running", "चल रहा है"],
       waiting_confirmation: ["Waiting for confirmation", "पुष्टि की प्रतीक्षा"],
       waiting_question: ["Question", "सवाल"],
+      waiting_user: ["Waiting for you", "आपकी प्रतीक्षा"],
+      paused: ["Paused", "रुका हुआ"],
       blocked: ["Blocked", "रुका हुआ"],
       done: ["Done", "पूरा हुआ"],
       failed: ["Failed", "विफल"],
