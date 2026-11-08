@@ -28,6 +28,7 @@ export interface InteractiveElement {
   value?: string;
   checked?: boolean;
   options?: string[];
+  selected?: string;
   isSensitive: boolean;
   sensitiveReason?: string;
   selector?: string;
@@ -38,6 +39,8 @@ export interface PageSnapshot {
   title: string;
   summary: string;
   interactiveElements: InteractiveElement[];
+  scrollY: number;
+  scrollHeight: number;
   timestamp: number;
 }
 

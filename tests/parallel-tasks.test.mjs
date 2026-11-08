@@ -15,6 +15,8 @@ const baseSnapshot = {
   url: "https://example.com",
   title: "Example",
   summary: "Search page",
+  scrollY: 0,
+  scrollHeight: 1000,
   timestamp: Date.now(),
   interactiveElements: [
     { id: 1, tag: "input", role: "searchbox", label: "Search", type: "search", isSensitive: false },
@@ -218,14 +220,82 @@ test("every guidance reason has short English and Hindi guidance", async () => {
   }
 });
 
-test("unchanged fingerprints pause before another planner call", async () => {
+test("three unchanged clicks pause before another planner call", async () => {
   let plans = 0;
-  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return { action: "type", id: 1, text: "same" }; } };
+  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return { action: "click", id: 2 }; } };
   const context = createTaskRunnerContext({ tabId: 11, goal: "make progress", planner, sendTabMessage: fakeTransport() });
   const result = await runAgentTask(context);
   assert.equal(result.status, "paused");
   assert.equal(result.context.guidance?.reason, "no_progress");
-  assert.equal(plans, 2);
+  assert.equal(plans, 3);
+});
+
+test("filling four text fields reaches done without a false no-progress pause", async () => {
+  const fields = Array.from({ length: 4 }, (_, index) => ({ id: index + 1, tag: "input", role: "textbox", label: `Field ${index + 1}`, value: "", isSensitive: false }));
+  let snapshot = { ...baseSnapshot, interactiveElements: fields };
+  let plans = 0;
+  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return plans <= 4 ? { action: "type", id: plans, text: `value ${plans}` } : { action: "done", summary: "four fields completed" }; } };
+  const transport = async (_tabId, message) => {
+    if (message.type === "BV_GET_SNAPSHOT") return { ok: true, snapshot };
+    if (message.type === "BV_EXECUTE_ACTION") {
+      const action = message.action;
+      snapshot = { ...snapshot, interactiveElements: snapshot.interactiveElements.map((element) => element.id === action.id ? { ...element, value: action.text } : element) };
+      return { ok: true, result: { success: true }, freshSnapshot: snapshot };
+    }
+    return { ok: true };
+  };
+  const context = createTaskRunnerContext({ tabId: 17, goal: "fill four fields", planner, sendTabMessage: transport });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "done");
+  assert.equal(result.summary, "four fields completed");
+  assert.equal(context.unchangedFingerprintCount, 0);
+});
+
+test("three scroll actions do not trigger no-progress", async () => {
+  let plans = 0;
+  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return plans <= 3 ? { action: "scroll", direction: "down", amount: plans * 100 } : { action: "done", summary: "scrolled" }; } };
+  const transport = async (_tabId, message) => message.type === "BV_GET_SNAPSHOT"
+    ? { ok: true, snapshot: baseSnapshot }
+    : { ok: true, result: { success: true }, freshSnapshot: baseSnapshot };
+  const context = createTaskRunnerContext({ tabId: 18, goal: "scroll down", planner, sendTabMessage: transport });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "done");
+  assert.equal(context.unchangedFingerprintCount, 0);
+});
+
+test("three unchanged clicks on one button pause with no-progress", async () => {
+  let plans = 0;
+  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return { action: "click", id: 2 }; } };
+  const context = createTaskRunnerContext({ tabId: 19, goal: "click unchanged button", planner, sendTabMessage: fakeTransport() });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "paused");
+  assert.equal(result.context.guidance?.reason, "no_progress");
+  assert.equal(plans, 3);
+});
+
+test("a type action with a changed field value resets unchanged progress", async () => {
+  let snapshot = { ...baseSnapshot, interactiveElements: [
+    { id: 1, tag: "input", role: "textbox", label: "Search", value: "", isSensitive: false },
+    { id: 2, tag: "button", role: "button", label: "Next", isSensitive: false },
+  ] };
+  let plans = 0;
+  const planner = { id: "fake", name: "Fake", async plan() {
+    plans += 1;
+    return plans === 1 ? { action: "type", id: 1, text: "changed" } : { action: "done", summary: "updated" };
+  } };
+  const transport = async (_tabId, message) => {
+    if (message.type === "BV_GET_SNAPSHOT") return { ok: true, snapshot };
+    if (message.type === "BV_EXECUTE_ACTION") {
+      const action = message.action;
+      if (action.action === "type") snapshot = { ...snapshot, interactiveElements: snapshot.interactiveElements.map((element) => element.id === action.id ? { ...element, value: action.text } : element) };
+      return { ok: true, result: { success: true }, freshSnapshot: snapshot };
+    }
+    return { ok: true };
+  };
+  const context = createTaskRunnerContext({ tabId: 20, goal: "type then continue", planner, sendTabMessage: transport });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "done");
+  assert.equal(context.unchangedFingerprintCount, 0);
 });
 
 test("A-B-A-B action cycles pause the isolated runner", async () => {
@@ -253,7 +323,7 @@ test("a user hint resumes the same context and resets stuck counters", async () 
   const planner = {
     id: "fake", name: "Fake", async plan() {
       plans += 1;
-      return plans < 3 ? { action: "type", id: 1, text: "same" } : { action: "done", summary: "completed after hint" };
+      return plans < 4 ? { action: "click", id: 2 } : { action: "done", summary: "completed after hint" };
     },
   };
   let changed = false;

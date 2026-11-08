@@ -196,6 +196,7 @@ export function capturePageSnapshot(): PageSnapshot {
       options: el instanceof HTMLSelectElement
         ? Array.from(el.options).map((option) => option.text.trim()).filter(Boolean).slice(0, 30)
         : undefined,
+      selected: el instanceof HTMLSelectElement ? el.selectedOptions[0]?.text.trim() || undefined : undefined,
       isSensitive: sensitivity.isSensitive,
       sensitiveReason: sensitivity.reason,
     });
@@ -206,6 +207,8 @@ export function capturePageSnapshot(): PageSnapshot {
     title: document.title,
     summary: extractPageSummary(),
     interactiveElements,
+    scrollY: Math.round(window.scrollY / 50) * 50,
+    scrollHeight: document.documentElement.scrollHeight,
     timestamp: Date.now(),
   };
 }

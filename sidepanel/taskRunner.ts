@@ -160,12 +160,6 @@ function outcomeSpeech(action: PlannerAction, snapshot: PageSnapshot): string {
   return action.action === "done" ? action.summary : action.action === "ask_user" ? action.question : "Action completed.";
 }
 
-function repeatableActionKey(action: PlannerAction): string | null {
-  if (action.action === "click") return `click:${action.id}`;
-  if (action.action === "navigate") return `navigate:${action.url.trim().replace(/\/$/, "")}`;
-  return null;
-}
-
 function actionKey(action: PlannerAction): string {
   return JSON.stringify(action);
 }
@@ -180,8 +174,14 @@ function hashFingerprint(value: string): string {
 }
 
 function snapshotFingerprint(snapshot: PageSnapshot): string {
-  const controls = snapshot.interactiveElements.map((element) => `${element.id}:${element.label}:${element.role}`).join("|");
-  return hashFingerprint(`${snapshot.url}|${snapshot.summary}|${controls}`);
+  const controls = snapshot.interactiveElements.map((element) => {
+    const safeState = element.isSensitive
+      ? "sensitive"
+      : `${element.value || ""}:${element.checked === undefined ? "" : String(element.checked)}:${element.selected || ""}`;
+    return `${element.id}:${element.label}:${element.role}:${safeState}`;
+  }).join("|");
+  const scrollY = Math.round((snapshot.scrollY || 0) / 50) * 50;
+  return hashFingerprint(`${snapshot.url}|${snapshot.summary}|${snapshot.scrollHeight || 0}|${scrollY}|${controls}`);
 }
 
 function isContinueCommand(text: string): boolean {
@@ -265,8 +265,6 @@ async function executeConfirmedAction(context: TaskRunnerContext, pending: Pendi
 
 async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapshot): Promise<TaskRunnerResult> {
   let currentSnapshot = initialSnapshot || await fetchSnapshot(context);
-  let lastSuccessfulRepeatableAction: string | null = null;
-  let lastSkippedRepeatedAction: string | null = null;
   context.lastFingerprint = snapshotFingerprint(currentSnapshot);
 
   for (let stepNumber = context.steps.length + 1; stepNumber <= context.maxSteps; stepNumber += 1) {
@@ -294,20 +292,6 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
           pageSummary: currentSnapshot.summary.slice(0, 180),
         }, "waiting_user");
       }
-    }
-
-    const key = repeatableActionKey(action);
-    if (key && key === lastSuccessfulRepeatableAction) {
-      const message = key === lastSkippedRepeatedAction
-        ? "I already completed that action twice."
-        : "I already completed that action and will not repeat it.";
-      lastSkippedRepeatedAction = key;
-      context.conversation = [...context.conversation, { role: "assistant" as const, content: message }].slice(-6);
-      return await pauseWithGuidance(context, "repeated_action", {
-        tried: [describeAction(action)],
-        pageTitle: currentSnapshot.title,
-        pageSummary: currentSnapshot.summary.slice(0, 180),
-      });
     }
 
     const safety = inspectActionSafety(action, currentSnapshot);
@@ -395,8 +379,6 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
       }, "paused");
     }
 
-    lastSuccessfulRepeatableAction = key;
-    lastSkippedRepeatedAction = null;
     context.staleElementRetries = 0;
     context.failedActionCounts.delete(actionKey(action));
     const speech = outcomeSpeech(action, currentSnapshot);
@@ -406,9 +388,14 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
     currentSnapshot = response.freshSnapshot || await fetchSnapshot(context);
     const afterFingerprint = snapshotFingerprint(currentSnapshot);
     context.recentActionKeys = [...context.recentActionKeys, actionKey(action)].slice(-4);
-    context.unchangedFingerprintCount = beforeFingerprint === afterFingerprint ? context.unchangedFingerprintCount + 1 : 0;
+    const countsAsUnchangedAction = action.action === "click" || action.action === "navigate" || action.action === "press_key";
+    context.unchangedFingerprintCount = countsAsUnchangedAction && beforeFingerprint === afterFingerprint
+      ? context.unchangedFingerprintCount + 1
+      : 0;
     context.lastFingerprint = afterFingerprint;
-    const cycle = context.recentActionKeys.length === 4 &&
+    const recentActions = context.steps.slice(-4).map((step) => step.action);
+    const scrollOnlyCycle = recentActions.length === 4 && recentActions.every((recentAction) => recentAction.action === "scroll");
+    const cycle = !scrollOnlyCycle && context.recentActionKeys.length === 4 &&
       context.recentActionKeys[0] === context.recentActionKeys[2] &&
       context.recentActionKeys[1] === context.recentActionKeys[3] &&
       context.recentActionKeys[0] !== context.recentActionKeys[1];
@@ -419,7 +406,7 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
         pageSummary: currentSnapshot.summary.slice(0, 180),
       });
     }
-    if (context.unchangedFingerprintCount >= 2) {
+    if (context.unchangedFingerprintCount >= 3) {
       return await pauseWithGuidance(context, "no_progress", {
         tried: context.steps.slice(-3).map((step) => describeAction(step.action)),
         pageTitle: currentSnapshot.title,

@@ -1,2 +1,0 @@
-Animation helpers used in the composition: onetake motion library by Patrick (github.com/feitangyuan), © 2026, PolyForm Noncommercial 1.0.0.
-The source composition and MP4 are provided for noncommercial use under the terms in ONETAKE-LICENSE.txt.
