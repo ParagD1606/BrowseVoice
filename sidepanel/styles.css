@@ -445,6 +445,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .confirmation-actions button { flex: 1; min-height: 36px; }
 .question-answer-row { display: flex; gap: 7px; width: 100%; }
 .question-answer-row .input-text { min-height: 36px; }
+.question-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.question-option { padding: 6px 9px; color: #dceaff; border: 1px solid rgba(114,170,255,.35); border-radius: 999px; background: rgba(76,140,240,.16); font-size: 10px; }
+.question-option:hover { border-color: var(--blue); background: rgba(76,140,240,.25); }
 .btn-confirm-no { padding: 8px; color: var(--muted); border: 1px solid var(--line); background: var(--raised); font-size: 12px; }
 .btn-confirm-no:hover { color: var(--ink); border-color: var(--line-strong); }
 @keyframes bvFadeIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
@@ -502,9 +505,18 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .task-status-dot.running { background: var(--blue); }
 .task-status-dot.waiting_confirmation { background: var(--amber); }
 .task-status-dot.waiting_question { background: var(--blue); }
+.task-status-dot.waiting_user, .task-status-dot.paused { background: var(--amber); }
 .task-status-dot.blocked, .task-status-dot.failed { background: var(--red); }
 .task-status-dot.done { background: var(--green); }
 .task-current-step { margin-top: 4px; overflow: hidden; color: #c1ccd9; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.task-guidance { display: flex; flex-direction: column; gap: 5px; margin-top: 9px; padding: 9px; border: 1px solid rgba(255,195,115,.25); border-radius: 9px; background: rgba(181,120,43,.1); }
+.task-guidance strong { color: #ffe0a8; font-size: 11px; }
+.task-guidance p, .task-guidance li { color: #d2dbe7; font-size: 10px; line-height: 1.45; }
+.task-guidance p { margin: 0; }
+.task-guidance ul { display: flex; flex-direction: column; gap: 3px; margin: 0; padding-left: 15px; }
+.task-guidance-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.task-guidance-button { padding: 5px 8px; color: #dceaff; border: 1px solid rgba(114,170,255,.35); border-radius: 7px; background: rgba(76,140,240,.14); font-size: 10px; }
+.task-guidance-button:hover { border-color: var(--blue); background: rgba(76,140,240,.25); }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
 /* Command-center visual pass inspired by the supplied reference. */

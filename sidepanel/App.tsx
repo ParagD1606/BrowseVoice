@@ -40,6 +40,7 @@ import {
 import { validatePlannerAction, type PlannerAction } from "../lib/schema";
 import type { SubTask } from "../lib/schema";
 import { getPlannerRetryAfterMs, isPlannerRateLimitError } from "../lib/planner";
+import { buildGuidance, type Guidance, type GuidanceAction } from "../lib/guidance";
 import { MicrophoneSession } from "./mic";
 import {
   askSiteQuestion,
@@ -52,6 +53,7 @@ import {
 import { requestSiteSafety, type SiteSafetyResult } from "../lib/site-safety";
 import {
   createTaskRunnerContext,
+  applyTaskGuidance,
   resumeAgentTask,
   runAgentTask,
   stopAgentTask,
@@ -252,6 +254,7 @@ interface TaskCardState {
   confirmationMessage?: string;
   summary?: string;
   error?: string;
+  guidance?: Guidance;
 }
 
 interface SiteChatState {
@@ -641,7 +644,14 @@ export const App: React.FC = () => {
       for (const [taskId, context] of taskContextsRef.current.entries()) {
         if (context.tabId !== tabId) continue;
         stopAgentTask(context);
-        publishTaskCard(taskId, { status: "failed", error: "The controlled tab was closed.", currentStep: "Tab closed" });
+        const guidance = buildGuidance("tab_closed", {
+          translate,
+          taskLabel: taskViewsRef.current.get(taskId)?.label,
+          tabTitle: taskViewsRef.current.get(taskId)?.tabTitle,
+          error: "The controlled tab was closed.",
+        });
+        applyTaskGuidance(context, guidance, "failed");
+        publishTaskCard(taskId, { status: "failed", error: guidance.whatHappened, currentStep: guidance.title, guidance });
         taskContextsRef.current.delete(taskId);
       }
       if (activeTabId === tabId) {
@@ -1377,7 +1387,7 @@ export const App: React.FC = () => {
   const maybeSpeakCombinedSummary = async () => {
     if (summarySpokenGenerationRef.current === taskRunGenerationRef.current || activeTaskIdsRef.current.length === 0) return;
     const cards = activeTaskIdsRef.current.map((id) => taskViewsRef.current.get(id)).filter(Boolean) as TaskCardState[];
-    if (cards.length !== activeTaskIdsRef.current.length || cards.some((card) => ["queued", "running", "waiting_confirmation", "waiting_question"].includes(card.status))) return;
+    if (cards.length !== activeTaskIdsRef.current.length || cards.some((card) => ["queued", "running", "waiting_confirmation", "waiting_question", "waiting_user", "paused"].includes(card.status))) return;
     summarySpokenGenerationRef.current = taskRunGenerationRef.current;
     const completed = cards.filter((card) => card.status === "done").map((card) => `${card.label}: ${card.summary || "completed"}`);
     const failed = cards.filter((card) => card.status !== "done").map((card) => `${card.label}: ${card.error || card.currentStep || "not completed"}`);
@@ -1400,6 +1410,7 @@ export const App: React.FC = () => {
       goal: task.goal,
       planner,
       sendTabMessage,
+      translate,
       callbacks: {
         onStatus: (taskStatus, text) => {
           publishTaskCard(task.id, { status: taskStatus, currentStep: text, ...(taskStatus === "done" ? { summary: text } : {}) });
@@ -1415,12 +1426,26 @@ export const App: React.FC = () => {
           }
         },
         onPrompt: async (text, kind) => {
-          if (kind === "confirmation" || kind === "blocked") await speakStatus(text);
+          if (kind === "confirmation") await speakStatus(text);
+        },
+        onGuidance: async (guidance) => {
+          publishTaskCard(task.id, {
+            guidance,
+            currentStep: guidance.title,
+            error: guidance.whatHappened,
+          });
+          await speakStatus(`${guidance.title}. ${guidance.whatToDo[0] || ""}`.trim());
         },
         onRateLimited: (attempt) => publishTaskCard(task.id, { currentStep: `${translate("Rate limited, retrying", "रेट लिमिट है, फिर कोशिश कर रहे हैं")} (${attempt}/2)` }),
       },
     });
     taskContextsRef.current.set(task.id, context);
+    if (settings.llmProvider !== "mock" && !settings.llmApiKey.trim()) {
+      const guidance = buildGuidance("no_api_key", { translate, taskLabel: task.label, tabTitle: taskViewsRef.current.get(task.id)?.tabTitle });
+      applyTaskGuidance(context, guidance);
+      publishTaskCard(task.id, { status: "paused", currentStep: guidance.title, error: guidance.whatHappened, guidance });
+      return { status: "paused", error: guidance.whatHappened, context };
+    }
     const formFillIntent = /\b(fill|complete|populate|enter details|register|sign up|apply for|bhar(?:o|na|do|de))\b|फॉर्म|फ़ॉर्म|भर(?:ो|ना|ें)/i.test(task.goal);
     if (activeTaskIdsRef.current.length === 1 && formFillIntent && !formFillRef.current) {
       try {
@@ -1436,8 +1461,10 @@ export const App: React.FC = () => {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Could not inspect the form.";
-        publishTaskCard(task.id, { status: "failed", error: message, currentStep: message });
-        return { status: "failed", error: message, context };
+        const guidance = buildGuidance("action_failed", { translate, taskLabel: task.label, error: message });
+        applyTaskGuidance(context, guidance, "failed");
+        publishTaskCard(task.id, { status: "failed", error: guidance.whatHappened, currentStep: guidance.title, guidance });
+        return { status: "failed", error: guidance.whatHappened, context };
       }
     }
     const result = await runAgentTask(context);
@@ -1447,7 +1474,7 @@ export const App: React.FC = () => {
       publishTaskCard(task.id, { status: "waiting_question", currentStep: context.pendingQuestion || "Waiting for your answer" });
       enqueueQuestion(task.id);
     } else {
-      publishTaskCard(task.id, { status: result.status, summary: result.summary, error: result.error });
+      publishTaskCard(task.id, { status: result.status, summary: result.summary, error: result.error, guidance: context.guidance || undefined });
     }
     await maybeSpeakCombinedSummary();
     return result;
@@ -1556,6 +1583,60 @@ export const App: React.FC = () => {
 
   const runAgentLoop = async (initialRequest: string, resumeExistingTask = false) => startTaskRun(initialRequest, resumeExistingTask);
 
+  const publishTaskResult = (taskId: string, result: TaskRunnerResult) => {
+    const context = result.context;
+    if (result.status === "waiting_confirmation") {
+      publishTaskCard(taskId, {
+        status: result.status,
+        confirmationMessage: context.pendingConfirmation?.message || "Waiting for your response",
+        guidance: undefined,
+      });
+    } else if (result.status === "waiting_question") {
+      publishTaskCard(taskId, {
+        status: result.status,
+        currentStep: context.pendingQuestion || "Waiting for your answer",
+        guidance: context.guidance || undefined,
+      });
+      enqueueQuestion(taskId);
+    } else {
+      publishTaskCard(taskId, {
+        status: result.status,
+        summary: result.summary,
+        error: result.error,
+        guidance: context.guidance || undefined,
+        currentStep: context.guidance?.title || result.summary || result.error || taskViewsRef.current.get(taskId)?.currentStep || "",
+      });
+    }
+  };
+
+  const handleTaskGuidanceAction = async (taskId: string, guidanceAction: GuidanceAction) => {
+    const task = taskViewsRef.current.get(taskId);
+    const context = taskContextsRef.current.get(taskId);
+    if (guidanceAction.kind === "open_settings") {
+      setSettingsOpen(true);
+      return;
+    }
+    if (guidanceAction.kind === "focus_tab") {
+      if (task?.tabId !== null && task?.tabId !== undefined) await chrome.tabs.update(task.tabId, { active: true });
+      return;
+    }
+    if (guidanceAction.kind === "open_url") {
+      if (task?.tabId !== null && task?.tabId !== undefined && guidanceAction.payload) {
+        await chrome.tabs.update(task.tabId, { url: guidanceAction.payload });
+        publishTaskCard(taskId, { currentStep: translate("Page opened. Tap Continue when it is ready.", "पेज खुल गया। तैयार होने पर Continue दबाएँ।") });
+      }
+      return;
+    }
+    if (guidanceAction.kind === "dismiss") {
+      publishTaskCard(taskId, { status: "failed", currentStep: translate("Task dismissed.", "काम बंद कर दिया गया।") });
+      return;
+    }
+    if (!context) return;
+    const result = await resumeAgentTask(context, true, guidanceAction.kind === "retry" ? "retry" : "continue");
+    publishTaskResult(taskId, result);
+    await maybeSpeakCombinedSummary();
+  };
+
   const confirmTask = async (confirmed: boolean, answer?: string) => {
     const taskId = activeConfirmationTaskId || confirmationQueueRef.current[0];
     if (!taskId) return;
@@ -1566,8 +1647,7 @@ export const App: React.FC = () => {
     setConfirmationMessage("");
     const result = await resumeAgentTask(context, confirmed, answer);
     if (result.status === "waiting_confirmation") enqueueConfirmation(taskId);
-    else if (result.status === "waiting_question") enqueueQuestion(taskId);
-    else publishTaskCard(taskId, { status: result.status, summary: result.summary, error: result.error });
+    else publishTaskResult(taskId, result);
     await maybeSpeakCombinedSummary();
   };
 
@@ -1589,7 +1669,7 @@ export const App: React.FC = () => {
     const result = await resumeAgentTask(context, true, answer.trim());
     if (result.status === "waiting_question") enqueueQuestion(taskId);
     else if (result.status === "waiting_confirmation") enqueueConfirmation(taskId);
-    else publishTaskCard(taskId, { status: result.status, summary: result.summary, error: result.error });
+    else publishTaskResult(taskId, result);
     await maybeSpeakCombinedSummary();
   };
 
@@ -1865,6 +1945,13 @@ export const App: React.FC = () => {
             />
             <button className="btn-primary" type="submit">{translate("Answer", "जवाब")}</button>
           </form>
+          {(taskContextsRef.current.get(activeQuestionTaskId)?.pendingQuestionOptions || []).length > 0 && (
+            <div className="question-options" aria-label="Question options">
+              {taskContextsRef.current.get(activeQuestionTaskId)?.pendingQuestionOptions.map((option) => (
+                <button key={option} type="button" className="question-option" onClick={() => void answerTask(option)}>{option}</button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -1909,6 +1996,22 @@ export const App: React.FC = () => {
                   </div>
                   <div className="task-status-row"><span className={`task-status-dot ${task.status}`} /><span>{taskStatusLabel(task.status)}</span></div>
                   <div className="task-current-step">{task.currentStep}</div>
+                  {task.guidance && (
+                    <div className="task-guidance" role="status">
+                      <strong>{task.guidance.title}</strong>
+                      <p>{task.guidance.whatHappened}</p>
+                      <ul>
+                        {task.guidance.whatToDo.slice(0, 3).map((instruction) => <li key={instruction}>{instruction}</li>)}
+                      </ul>
+                      <div className="task-guidance-actions">
+                        {task.guidance.actions.map((guidanceAction) => (
+                          <button key={`${guidanceAction.kind}-${guidanceAction.label}`} type="button" className="task-guidance-button" onClick={() => void handleTaskGuidanceAction(task.id, guidanceAction)}>
+                            {guidanceAction.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </article>
               ))}
             </div>
