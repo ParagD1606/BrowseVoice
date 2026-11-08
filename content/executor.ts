@@ -5,6 +5,7 @@
  * - click(id)
  * - type(id, text)
  * - select(id, value)
+ * - press_key(key)
  * - scroll(direction, amount)
  * - navigate(url)
  *
@@ -21,6 +22,14 @@ export interface ExecutionResult {
   error?: string;
   settled: boolean;
   waitedMs: number;
+}
+
+/** Use the browser's native setter so React/Vue controlled inputs observe updates. */
+export function setNativeElementValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  const prototype = element instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (setter) setter.call(element, value);
+  else element.value = value;
 }
 
 /**
@@ -161,7 +170,7 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
         el.focus();
 
         if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-          el.value = action.text;
+          setNativeElementValue(el, action.text);
           el.dispatchEvent(new InputEvent("input", { bubbles: true, data: action.text }));
           el.dispatchEvent(new Event("change", { bubbles: true }));
         } else {
@@ -239,6 +248,19 @@ export async function executeAction(action: PlannerAction): Promise<ExecutionRes
           settled: settle.settled,
           waitedMs: settle.waitedMs,
         };
+      }
+
+      case "press_key": {
+        const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body;
+        if (!target) {
+          return { success: false, action, error: "No focused element is available for the key press.", settled: true, waitedMs: 0 };
+        }
+        const eventInit: KeyboardEventInit = { key: action.key, code: action.key === "Enter" ? "Enter" : undefined, bubbles: true, cancelable: true };
+        target.dispatchEvent(new KeyboardEvent("keydown", eventInit));
+        target.dispatchEvent(new KeyboardEvent("keypress", eventInit));
+        target.dispatchEvent(new KeyboardEvent("keyup", eventInit));
+        const settle = await waitForPageSettle(500);
+        return { success: true, action, settled: settle.settled, waitedMs: settle.waitedMs };
       }
 
       case "navigate": {

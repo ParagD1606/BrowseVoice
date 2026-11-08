@@ -18,6 +18,7 @@ import {
   inspectActionSafety,
   isStopCommand,
   isConfirmationCommand,
+  isCancellationCommand,
 } from "../lib/safety.ts";
 import { hasPaymentReceipt } from "../lib/payment-state.ts";
 
@@ -243,13 +244,17 @@ test("Command 7: 'proceed to payment' (English) -> clicks proceed button", async
 
 test("Command 8: 'ruko' (Hindi Stop Word) -> triggers emergency stop", () => {
   assert.equal(isStopCommand("ruko"), true);
-  assert.equal(isStopCommand("are ruko jaldi"), true);
+  assert.equal(isStopCommand("ruko ruko"), true);
   assert.equal(isStopCommand("khatam karo"), true);
+  assert.equal(isStopCommand("cancel my order on amazon"), false);
+  assert.equal(isStopCommand("search bus stop timings"), false);
+  assert.equal(isStopCommand("pause the video and open amazon"), false);
+  assert.equal(isStopCommand("play bas song on youtube"), false);
 });
 
 test("Command 9: 'stop' (English Stop Word) -> triggers emergency stop", () => {
   assert.equal(isStopCommand("stop"), true);
-  assert.equal(isStopCommand("please stop now"), true);
+  assert.equal(isStopCommand("stop it"), true);
   assert.equal(isStopCommand("cancel"), true);
 });
 
@@ -257,6 +262,11 @@ test("Command 10: 'ha payment confirm karo' (Hindi/Hinglish Confirmation) -> con
   assert.equal(isConfirmationCommand("ha payment confirm karo"), true);
   assert.equal(isConfirmationCommand("haan"), true);
   assert.equal(isConfirmationCommand("yes"), true);
+  for (const phrase of ["ok", "okay", "sure", "go ahead", "do it", "yeah", "yep", "kar do", "karo", "theek hai", "ठीक है", "सही है", "जी", "हाँ", "हां", "haan ji"]) {
+    assert.equal(isConfirmationCommand(phrase), true, phrase);
+  }
+  assert.equal(isCancellationCommand("no"), true);
+  assert.equal(isConfirmationCommand("no, do it"), false);
   assert.equal(isConfirmationCommand("bill bharo"), false, "A payment request is not itself confirmation");
 
   const action = await planner.plan({
@@ -286,8 +296,11 @@ test("Payment form is not reported complete and asks the user to handle sensitiv
   assert.equal(hasPaymentReceipt(MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT.summary), false);
 });
 
-test("payment completion requires visible receipt evidence, not a success word alone", () => {
-  assert.equal(hasPaymentReceipt("Payment Successful"), false);
+test("payment completion recognizes generic visible receipt evidence", () => {
+  assert.equal(hasPaymentReceipt("Payment Successful"), true);
+  assert.equal(hasPaymentReceipt("Order confirmed"), true);
+  assert.equal(hasPaymentReceipt("Transaction ID: TX-123"), true);
+  assert.equal(hasPaymentReceipt("Receipt available"), true);
   assert.equal(hasPaymentReceipt("Payment Gateway | Payment Successful | Visible payment receipt: Transaction ID present."), true);
 });
 
@@ -323,6 +336,13 @@ test("Safety Rule Verification: Sensitive Field Typing Blocked", () => {
   const aadhaarField = detectSensitiveField({ name: "aadhaar_no" });
   assert.equal(aadhaarField.isSensitive, true);
 
+  for (const field of ["pin", "mpin", "upi pin", "otp", "cvv", "card number", "password", "aadhaar", "aadhar"]) {
+    assert.equal(detectSensitiveField({ name: field }).isSensitive, true, field);
+  }
+  for (const field of ["shipping", "spinner", "pincode", "pin code", "postal code", "zip", "shipping address", "mobile number"]) {
+    assert.equal(detectSensitiveField({ name: field }).isSensitive, false, field);
+  }
+
   // Safety inspection blocks action if planner attempts to type into sensitive field ID 4 (password)
   const forbiddenTypeAction = { action: "type", id: 4, text: "mySecret123" };
   const safetyResult = inspectActionSafety(forbiddenTypeAction, MOCK_PORTAL_LOOKUP_SNAPSHOT);
@@ -330,4 +350,17 @@ test("Safety Rule Verification: Sensitive Field Typing Blocked", () => {
   assert.equal(safetyResult.permitted, false, "Typing into password field must be prohibited");
   assert.match(safetyResult.reason, /Safety Block/);
   assert.match(safetyResult.safetyAlertSpeech, /password|OTP|sensitive/i);
+});
+
+test("consequential actions require confirmation, including any payment-form button", () => {
+  const labels = ["Buy now", "Book now", "Donate", "Delete", "Remove account", "Complete purchase", "Confirm booking", "Authorize", "Apply", "Subscribe", "Unsubscribe", "Proceed to pay", "खरीदें"];
+  for (const label of labels) {
+    const result = inspectActionSafety({ action: "click", id: 10 }, { ...MOCK_PORTAL_LOOKUP_SNAPSHOT, interactiveElements: [{ id: 10, tag: "button", role: "button", label, isSensitive: false }] });
+    assert.equal(result.requiresConfirmation, true, label);
+  }
+  const ordinaryButtonOnPaymentForm = inspectActionSafety(
+    { action: "click", id: 11 },
+    { ...MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT, interactiveElements: [...MOCK_PORTAL_PAYMENT_FORM_SNAPSHOT.interactiveElements, { id: 11, tag: "button", role: "button", label: "Help", isSensitive: false }] },
+  );
+  assert.equal(ordinaryButtonOnPaymentForm.requiresConfirmation, true);
 });

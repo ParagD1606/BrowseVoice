@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decomposeRequest, decomposeRequestWithFallback } from "../lib/planner.ts";
+import { buildPlannerPrompt, decomposeRequest, decomposeRequestWithFallback, PLANNER_SYSTEM_PROMPT, shouldCallDecompositionModel } from "../lib/planner.ts";
 import { validatePlannerAction } from "../lib/schema.ts";
 import {
   createTaskRunnerContext,
@@ -111,6 +111,27 @@ test("navigation guard rejects javascript, file, and chrome URLs", () => {
   assert.equal(validatePlannerAction({ action: "navigate", url: "https://example.com" }).valid, true);
 });
 
+test("press_key is a validated planner action and is included in the planner prompt", () => {
+  const action = validatePlannerAction({ action: "press_key", key: "Enter" });
+  assert.equal(action.valid, true);
+  assert.match(PLANNER_SYSTEM_PROMPT, /press_key/);
+});
+
+test("mock planner submits a typed search with Enter", async () => {
+  const { MockRuleBasedPlanner } = await import("../lib/planner.ts");
+  const planner = new MockRuleBasedPlanner();
+  const first = await planner.plan({ userRequest: "search cats", snapshot: baseSnapshot, history: [] });
+  assert.equal(first.action, "type");
+  const second = await planner.plan({ userRequest: "search cats", snapshot: baseSnapshot, history: [{ stepNumber: 1, action: first, status: "success", timestamp: Date.now() }] });
+  assert.deepEqual(second, { action: "press_key", key: "Enter", rationale: "Submitting the search." });
+});
+
+test("decomposition is skipped for ordinary single-site requests", () => {
+  assert.equal(shouldCallDecompositionModel("search cats on youtube"), false);
+  assert.equal(shouldCallDecompositionModel("open youtube in one tab"), true);
+  assert.equal(shouldCallDecompositionModel("open amazon and google"), true);
+});
+
 test("stopping a runner aborts its controller immediately", () => {
   const planner = { id: "fake", name: "Fake", async plan() { return { action: "done", summary: "done" }; } };
   const first = createTaskRunnerContext({ tabId: 1, goal: "first", planner, sendTabMessage: fakeTransport() });
@@ -143,4 +164,41 @@ test("malformed decomposition JSON falls back to one task and preserves the orig
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("runner retries stale element snapshots up to three times and resets after success", async () => {
+  let plans = 0;
+  let staleFailures = 0;
+  const planner = {
+    id: "fake",
+    name: "Fake",
+    async plan() {
+      plans += 1;
+      return plans === 5 ? { action: "done", summary: "done" } : { action: "click", id: 1 };
+    },
+  };
+  const send = async (_tabId, message) => {
+    if (message.type === "BV_GET_SNAPSHOT") return { ok: true, snapshot: baseSnapshot };
+    if (message.type === "BV_EXECUTE_ACTION") {
+      if (staleFailures < 3) {
+        staleFailures += 1;
+        return { ok: false, error: "Element ID [1] was not found in the current page." };
+      }
+      return { ok: true, result: { success: true }, freshSnapshot: baseSnapshot };
+    }
+    return { ok: true };
+  };
+  const context = createTaskRunnerContext({ tabId: 9, goal: "click then finish", planner, sendTabMessage: send });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "done");
+  assert.equal(staleFailures, 3);
+});
+
+test("ask_user is exposed as a question, not a confirmation", async () => {
+  const planner = { id: "fake", name: "Fake", async plan() { return { action: "ask_user", question: "What should I search?" }; } };
+  const context = createTaskRunnerContext({ tabId: 10, goal: "search something", planner, sendTabMessage: fakeTransport() });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "waiting_question");
+  assert.equal(context.pendingQuestion, "What should I search?");
+  assert.equal(context.pendingConfirmation, null);
 });

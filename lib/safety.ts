@@ -15,6 +15,7 @@
  */
 
 import { isAllowedNavigationUrl, type PlannerAction } from "./schema.ts";
+import { hasVisiblePaymentForm } from "./payment-state.ts";
 
 export interface InteractiveElement {
   id: number;
@@ -45,11 +46,11 @@ export interface PageSnapshot {
  * Passwords, OTPs, PINs, CVVs, Credit/Debit Cards, Aadhaar numbers.
  */
 export const SENSITIVE_PATTERNS = {
-  password: /(password|passwd|passcode|secret|pin|mpin|tpin)/i,
-  otp: /(otp|one[-\s_]?time[-\s_]?password|verification[-\s_]?code|auth[-\s_]?code)/i,
-  paymentCard: /(card[_\s-]?no|card[_\s-]?number|cardnum|credit[_\s-]?card|debit[_\s-]?card|cvv|cvc|expiry|exp[_\s-]?date|upi[_\s-]?id|vpa|virtual[_\s-]?payment[_\s-]?address)/i,
-  aadhaar: /(aadhaar|aadhar|uidai|unique[-\s_]?identification)/i,
-  generalSensitive: /(ssn|pan[_\s-]?card|bank[_\s-]?acc|account[_\s-]?number)/i,
+  password: /(?:^|[^a-z0-9])(?:password|passwd|passcode|secret|pin(?!\s*code))(?:$|[^a-z0-9])/i,
+  otp: /(?:^|[^a-z0-9])(?:otp|one[-\s_]?time[-\s_]?password|verification[-\s_]?code|auth[-\s_]?code)(?:$|[^a-z0-9])/i,
+  paymentCard: /(?:^|[^a-z0-9])(?:card[_\s-]?(?:no|number|num)|credit[_\s-]?card|debit[_\s-]?card|cvv|cvc|expiry|exp[_\s-]?date|upi[_\s-]?(?:id|pin)|vpa|virtual[-\s_]?payment[-\s_]?address|mpin|tpin)(?:$|[^a-z0-9])/i,
+  aadhaar: /(?:^|[^a-z0-9])(?:aadhaar|aadhar|uidai|unique[-\s_]?identification)(?:$|[^a-z0-9])/i,
+  generalSensitive: /(?:^|[^a-z0-9])(?:ssn|pan[_\s-]?card|bank[_\s-]?acc|account[_\s-]?number)(?:$|[^a-z0-9])/i,
 };
 
 /**
@@ -63,13 +64,16 @@ export const STOP_WORDS_REGEX =
  * Words that confirm a pending consequential/submit/payment action.
  */
 export const CONFIRMATION_WORDS_REGEX =
-  /\b(yes|haan|ha|haa|sahi hai|theek hai|proceed|confirm|approve|pay now)\b|हाँ|हां|जी हाँ/i;
+  /\b(?:yes|yeah|yep|ok|okay|sure|go ahead|do it|haan(?:\s+ji)?|ha|haa|kar do|karo|theek hai|sahi hai|proceed|confirm|approve|pay now)\b|ठीक है|सही है|जी|हाँ|हां/i;
+
+export const NEGATIVE_CONFIRMATION_WORDS_REGEX =
+  /\b(?:no|nope|nah|nahi|cancel|mat karo|don't|do not|not okay|never)\b|नहीं/i;
 
 /**
  * Patterns identifying submit, payment, or irreversible actions requiring confirmation.
  */
 export const CONSEQUENTIAL_PATTERNS =
-  /\b(pay|payment|bharo|chukaao|submit|send|place order|checkout|confirm payment|karein|order now|transfer|debit)\b/i;
+  /\b(?:pay|payment|bharo|bharna|chukaao|submit|send|place order|checkout|confirm payment|order now|buy now|book now|donate|delete|remove account|complete purchase|confirm booking|authorize|apply|subscribe|unsubscribe|proceed to pay|transfer|debit)\b|भुगतान|खरीद(?:ें|ो)?|बुक(?: करें| करो)?|दान|हटाएं|खाता हटाएं|खरीद पूरी|बुकिंग की पुष्टि|अधिकृत|आवेदन करें|सब्सक्राइब|अनसब्सक्राइब|भुगतान पर जाएं/i;
 
 /**
  * Checks whether an interactive DOM element represents a sensitive credential or PII.
@@ -186,6 +190,7 @@ export function inspectActionSafety(
     if (action.action === "click") {
       const isConsequential =
         target.type === "submit" ||
+        hasVisiblePaymentForm(snapshot) ||
         CONSEQUENTIAL_PATTERNS.test(target.label) ||
         CONSEQUENTIAL_PATTERNS.test(target.name || "") ||
         CONSEQUENTIAL_PATTERNS.test(target.role || "");
@@ -211,12 +216,22 @@ export function inspectActionSafety(
  * Checks if user speech is an emergency stop command.
  */
 export function isStopCommand(text: string): boolean {
-  return STOP_WORDS_REGEX.test(text.trim());
+  const normalized = text.trim().replace(/[!?.,;:]+/g, " ").replace(/\s+/g, " ");
+  if (!normalized) return false;
+  const words = normalized.split(" ");
+  return words.length <= 3 && /^(?:ruko|ruk|roko|stop|cancel|bas|thehro|pause|band\s+karo|chup|khatam)\b/i.test(normalized);
 }
 
 /**
  * Checks if user speech provides positive confirmation.
  */
 export function isConfirmationCommand(text: string): boolean {
-  return CONFIRMATION_WORDS_REGEX.test(text.trim());
+  const normalized = text.trim().replace(/[!?.,;:]+/g, " ").replace(/\s+/g, " ");
+  if (!normalized || NEGATIVE_CONFIRMATION_WORDS_REGEX.test(normalized)) return false;
+  return CONFIRMATION_WORDS_REGEX.test(normalized);
+}
+
+/** Returns true only for an explicit negative answer to a pending confirmation. */
+export function isCancellationCommand(text: string): boolean {
+  return NEGATIVE_CONFIRMATION_WORDS_REGEX.test(text.trim());
 }

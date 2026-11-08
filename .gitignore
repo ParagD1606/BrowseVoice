@@ -7,6 +7,7 @@ dist/
 !README.md
 .backend-data/
 backend/data/
+promo/
 .env
 .env.local
 .env.*.local

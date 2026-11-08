@@ -25,6 +25,8 @@ import {
   convertFormAnswerToEnglish,
   decomposeRequest,
   fallbackToSingleTask,
+  shouldCallDecompositionModel,
+  answerAboutPage,
   type StepLogEntry,
   type SnipContext,
 } from "../lib/planner";
@@ -32,6 +34,7 @@ import {
   inspectActionSafety,
   isStopCommand,
   isConfirmationCommand,
+  isCancellationCommand,
   type PageSnapshot,
 } from "../lib/safety";
 import { validatePlannerAction, type PlannerAction } from "../lib/schema";
@@ -149,6 +152,10 @@ function collectFormFields(snapshot: PageSnapshot): { fields: FormFieldDescripto
     fields.push({ fingerprint: `${identity}#${occurrence}`, identity, occurrence, label, tag: element.tag, type: element.type, kind, name: element.name, options: kind === "select" ? element.options || [] : undefined });
   }
   return { fields, manualFields };
+}
+
+function isCurrentPageQuestion(text: string): boolean {
+  return /\b(?:what does this mean|what is this|explain this|explain the page|what does .* mean|what is on this page|summarize this page)\b|इसका मतलब|समझाओ|इस पेज पर क्या/i.test(text.trim());
 }
 
 function findFormField(snapshot: PageSnapshot, descriptor: FormFieldDescriptor, answer?: string) {
@@ -459,6 +466,8 @@ export const App: React.FC = () => {
   const [confirmationMessage, setConfirmationMessage] = useState<string>("");
   const [taskCards, setTaskCards] = useState<TaskCardState[]>([]);
   const [activeConfirmationTaskId, setActiveConfirmationTaskId] = useState<string | null>(null);
+  const [activeQuestionTaskId, setActiveQuestionTaskId] = useState<string | null>(null);
+  const [questionAnswer, setQuestionAnswer] = useState("");
   const [snips, setSnips] = useState<SnipContext[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [siteChatMessages, setSiteChatMessages] = useState<ChatMessage[]>([]);
@@ -498,6 +507,7 @@ export const App: React.FC = () => {
   const taskContextsRef = useRef(new Map<string, TaskRunnerContext>());
   const taskViewsRef = useRef(new Map<string, TaskCardState>());
   const confirmationQueueRef = useRef<string[]>([]);
+  const questionQueueRef = useRef<string[]>([]);
   const taskRunGenerationRef = useRef(0);
   const activeTaskIdsRef = useRef<string[]>([]);
   const summarySpokenGenerationRef = useRef(0);
@@ -538,6 +548,22 @@ export const App: React.FC = () => {
   const advanceConfirmationQueue = () => {
     confirmationQueueRef.current = confirmationQueueRef.current.slice(1);
     showNextConfirmation();
+  };
+
+  const showNextQuestion = () => {
+    const next = questionQueueRef.current[0] || null;
+    setActiveQuestionTaskId(next);
+    if (next) setQuestionAnswer("");
+  };
+
+  const enqueueQuestion = (taskId: string) => {
+    if (taskId && !questionQueueRef.current.includes(taskId)) questionQueueRef.current.push(taskId);
+    showNextQuestion();
+  };
+
+  const advanceQuestionQueue = () => {
+    questionQueueRef.current = questionQueueRef.current.slice(1);
+    showNextQuestion();
   };
 
   const resetSiteChatSession = () => {
@@ -652,7 +678,9 @@ export const App: React.FC = () => {
     stopAgentTasks(taskContextsRef.current.values());
     taskContextsRef.current.clear();
     confirmationQueueRef.current = [];
+    questionQueueRef.current = [];
     setActiveConfirmationTaskId(null);
+    setActiveQuestionTaskId(null);
     setPendingConfirmationAction(null);
     setConfirmationMessage("");
     setTaskCards((previous) => previous.map((task) => ({ ...task, status: "stopped", currentStep: translate("Stopped", "रोक दिया गया") })));
@@ -890,6 +918,11 @@ export const App: React.FC = () => {
 
   const handleUserRequest = async (text: string) => {
     if (formFillRef.current && await submitFormFieldAnswer(text)) return;
+    if (isCurrentPageQuestion(text)) {
+      if (snips.length > 0) await answerFromSnips(text);
+      else await answerFromPage(text);
+      return;
+    }
     if (siteChatRef.current.status === "ready" && siteChatRef.current.siteId) {
       await answerFromSite(text);
       return;
@@ -1270,6 +1303,31 @@ export const App: React.FC = () => {
     }
   };
 
+  const answerFromPage = async (question: string) => {
+    if (!activeTabId) return;
+    const userMessage: ChatMessage = { id: `page-user-${Date.now()}`, role: "user", text: question };
+    setChatMessages((previous) => [...previous, userMessage]);
+    setStatus("thinking");
+    setStatusText(translate("Reading the current page...", "वर्तमान पेज पढ़ रहे हैं..."));
+    try {
+      const snapshot = await fetchPageSnapshot(activeTabId);
+      const answer = await answerAboutPage(
+        { provider: settings.llmProvider, apiKey: settings.llmApiKey, endpoint: settings.llmEndpoint, model: settings.llmModel },
+        question,
+        snapshot,
+      );
+      setChatMessages((previous) => [...previous, { id: `page-assistant-${Date.now()}`, role: "assistant", text: answer.text }]);
+      setStatus("idle");
+      setStatusText(translate("Answer ready", "जवाब तैयार है"));
+      await speakStatus(answer.text.slice(0, 500));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not answer from the current page.";
+      setChatMessages((previous) => [...previous, { id: `page-assistant-${Date.now()}`, role: "assistant", text: message }]);
+      setStatus("idle");
+      setStatusText(translate("Could not answer", "जवाब नहीं मिल सका"));
+    }
+  };
+
   const waitForTabLoad = async (tabId: number, timeoutMs = 15_000): Promise<chrome.tabs.Tab> => {
     const tab = await chrome.tabs.get(tabId);
     if (tab.status === "complete") return tab;
@@ -1319,7 +1377,7 @@ export const App: React.FC = () => {
   const maybeSpeakCombinedSummary = async () => {
     if (summarySpokenGenerationRef.current === taskRunGenerationRef.current || activeTaskIdsRef.current.length === 0) return;
     const cards = activeTaskIdsRef.current.map((id) => taskViewsRef.current.get(id)).filter(Boolean) as TaskCardState[];
-    if (cards.length !== activeTaskIdsRef.current.length || cards.some((card) => ["queued", "running", "waiting_confirmation"].includes(card.status))) return;
+    if (cards.length !== activeTaskIdsRef.current.length || cards.some((card) => ["queued", "running", "waiting_confirmation", "waiting_question"].includes(card.status))) return;
     summarySpokenGenerationRef.current = taskRunGenerationRef.current;
     const completed = cards.filter((card) => card.status === "done").map((card) => `${card.label}: ${card.summary || "completed"}`);
     const failed = cards.filter((card) => card.status !== "done").map((card) => `${card.label}: ${card.error || card.currentStep || "not completed"}`);
@@ -1346,6 +1404,7 @@ export const App: React.FC = () => {
         onStatus: (taskStatus, text) => {
           publishTaskCard(task.id, { status: taskStatus, currentStep: text, ...(taskStatus === "done" ? { summary: text } : {}) });
           if (taskStatus === "waiting_confirmation") enqueueConfirmation(task.id);
+          if (taskStatus === "waiting_question") enqueueQuestion(task.id);
         },
         onStep: (entry) => {
           const current = taskViewsRef.current.get(task.id);
@@ -1370,10 +1429,10 @@ export const App: React.FC = () => {
         if (manualFields.length > 0) await sendTabMessage(tabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: manualFields });
         if (fields.length > 0) {
           formFillRef.current = { tabId, goal: task.goal, fields, index: 0, completed: new Set(), skippedManualCount: manualFields.length };
-          publishTaskCard(task.id, { status: "waiting_confirmation", currentStep: "Waiting for form details" });
+          publishTaskCard(task.id, { status: "waiting_question", currentStep: "Waiting for form details" });
           if (manualFields.length > 0) await speakStatus("I will leave sensitive and file fields for you to handle manually.");
           await askNextFormField();
-          return { status: "waiting_confirmation", context };
+          return { status: "waiting_question", context };
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Could not inspect the form.";
@@ -1384,6 +1443,9 @@ export const App: React.FC = () => {
     const result = await runAgentTask(context);
     if (result.status === "waiting_confirmation") {
       publishTaskCard(task.id, { status: "waiting_confirmation", confirmationMessage: context.pendingConfirmation?.message || context.pendingQuestion || "Waiting for your response" });
+    } else if (result.status === "waiting_question") {
+      publishTaskCard(task.id, { status: "waiting_question", currentStep: context.pendingQuestion || "Waiting for your answer" });
+      enqueueQuestion(task.id);
     } else {
       publishTaskCard(task.id, { status: result.status, summary: result.summary, error: result.error });
     }
@@ -1424,14 +1486,18 @@ export const App: React.FC = () => {
       conversationRef.current = [];
       awaitingUserReplyRef.current = false;
     }
-    const tasks = await decomposeWithRetry(initialRequest);
+    const tasks = shouldCallDecompositionModel(initialRequest)
+      ? await decomposeWithRetry(initialRequest)
+      : fallbackToSingleTask(initialRequest);
     if (isStoppedRef.current) return;
     const generation = ++taskRunGenerationRef.current;
     summarySpokenGenerationRef.current = 0;
     taskViewsRef.current.clear();
     taskContextsRef.current.clear();
     confirmationQueueRef.current = [];
+    questionQueueRef.current = [];
     setActiveConfirmationTaskId(null);
+    setActiveQuestionTaskId(null);
     setPendingConfirmationAction(null);
     setConfirmationMessage("");
     activeTaskIdsRef.current = tasks.map((task) => task.id);
@@ -1486,428 +1552,7 @@ export const App: React.FC = () => {
     await maybeSpeakCombinedSummary();
   };
 
-  const startTaskRun = async (initialRequest: string, resumeExistingTask = false) => {
-    return runParallelTask(initialRequest, resumeExistingTask);
-    /* Legacy single-tab loop retained below for reference during the merge.
-    if (!resumeExistingTask && snips.length > 0) {
-      await answerFromSnips(initialRequest);
-      return;
-    }
-    if (!activeTabId) {
-      alert("No active browser tab found.");
-      return;
-    }
-
-    isStoppedRef.current = false;
-    if (!resumeExistingTask) setSteps([]);
-    setStatus("thinking");
-    setStatusText(translate("Analyzing page...", "पेज का विश्लेषण हो रहा है..."));
-
-    // A reply to ask_user continues the original task. New commands start a clean context.
-    const isFollowUp = (resumeExistingTask || awaitingUserReplyRef.current) && taskGoalRef.current !== null;
-    if (!isFollowUp) {
-      taskGoalRef.current = initialRequest;
-      conversationRef.current = [{ role: "user" as const, content: initialRequest }];
-    } else if (!resumeExistingTask) {
-      conversationRef.current = [...conversationRef.current, { role: "user" as const, content: initialRequest }].slice(-6);
-    }
-    const taskGoal = taskGoalRef.current || initialRequest;
-    awaitingUserReplyRef.current = false;
-
-    // --- Check if we're on a restricted page (chrome://, new tab, etc.) ---
-    const tabInfo = await chrome.tabs.get(activeTabId);
-    if (isRestrictedPage(tabInfo.url)) {
-      // Try to resolve navigation intent directly (no LLM needed)
-      const directUrl = resolveDirectNavigationIntent(initialRequest);
-      if (directUrl) {
-        setStatus("executing");
-        setStatusText(`${translate("Opening", "खोल रहे हैं")} ${directUrl}...`);
-        const navAction: PlannerAction = {
-          action: "navigate",
-          url: directUrl,
-          rationale: ACTION_SPEECH[resolveSpeechLanguage(settings.languageCode, initialRequest)]?.opened || ACTION_SPEECH["en-IN"].opened,
-        };
-        setSteps([{
-          stepNumber: 1,
-          action: navAction,
-          status: "success",
-          spokenSummary: navAction.rationale,
-          timestamp: Date.now(),
-        }]);
-        await chrome.tabs.update(activeTabId, { url: directUrl });
-        await speakStatus(navAction.rationale || "Opened the requested page.");
-        setStatus("idle");
-        setStatusText(translate("Navigated", "पेज खुल गया है"));
-        return;
-      }
-      // Can't do anything else on restricted pages
-      setStatus("idle");
-      setStatusText(translate("⚠️ Please go to a normal webpage first", "⚠️ पहले सामान्य वेबपेज खोलें"));
-      alert(
-        "Browse Voice cannot control Chrome's built-in pages (new tab, chrome://settings, etc.).\n\n" +
-        "Please navigate to any website (e.g. google.com) and then give your command."
-      );
-      return;
-    }
-
-    // 1. Activate on-page visual indicator
-    await sendTabMessage(activeTabId, {
-      type: "BV_ACTIVATE_AGENT",
-      statusText: "Processing",
-    });
-
-    const planner: PlannerProvider = createPlanner({
-      provider: settings.llmProvider,
-      apiKey: settings.llmApiKey,
-      endpoint: settings.llmEndpoint,
-      model: settings.llmModel,
-    });
-
-    let currentSnapshot = await fetchPageSnapshot(activeTabId);
-    const formFillIntent = /\b(fill|complete|populate|enter details|register|sign up|apply for|bhar(?:o|na|do|de))\b|फॉर्म|फ़ॉर्म|भर(?:ो|ना|ें)/i.test(taskGoal);
-    if (!formFillRef.current && formFillIntent) {
-      const { fields, manualFields } = collectFormFields(currentSnapshot);
-      if (manualFields.length > 0) {
-        await sendTabMessage(activeTabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: manualFields });
-      }
-      if (fields.length > 0) {
-        formFillRef.current = {
-          tabId: activeTabId,
-          goal: taskGoal,
-          fields,
-          index: 0,
-          completed: new Set(),
-          skippedManualCount: manualFields.length,
-        };
-        if (manualFields.length > 0) {
-          await speakStatus("I will leave sensitive and file fields for you to handle manually. I will ask about every other visible field one at a time.");
-        }
-        await askNextFormField();
-        return;
-      }
-    }
-
-    let stepCount = resumeExistingTask ? stepsRef.current.length : 0;
-    const MAX_STEPS = 15;
-    let refreshedAfterStaleElement = false;
-    let lastSuccessfulRepeatableAction: string | null = null;
-    let lastSkippedRepeatedAction: string | null = null;
-
-    while (stepCount < MAX_STEPS) {
-      if (isStoppedRef.current) break;
-      stepCount++;
-
-      setStatus("thinking");
-        setStatusText(`${translate("Step", "स्टेप")} ${stepCount}: ${translate("Planning next action...", "अगली कार्रवाई की योजना बन रही है...")}`);
-
-      // 2. Query Planner
-      let action: PlannerAction;
-      try {
-        action = await planner.plan({
-          userRequest: taskGoal,
-          languageCode: resolveSpeechLanguage(settings.languageCode, taskGoal),
-          snapshot: currentSnapshot,
-          history: stepsRef.current.slice(-5),
-          conversation: conversationRef.current,
-        });
-      } catch (planErr) {
-        const errMsg = planErr instanceof Error ? planErr.message : "Planning error.";
-        await speakStatus(`योजना बनाने में त्रुटि: ${errMsg}`);
-        if (isFollowUp) awaitingUserReplyRef.current = true;
-        break;
-      }
-
-      if (isStoppedRef.current) break;
-
-      // A model may confuse opening the payment page with finishing payment.
-      // Never accept that completion unless the visible snapshot contains a receipt.
-      if (action.action === "done" && isPaymentIntent(taskGoal) && !hasPaymentReceipt(currentSnapshot.summary)) {
-        const continueToPayment = currentSnapshot.interactiveElements.find((element) =>
-          (element.tag === "button" || element.role === "button") &&
-          /continue.{0,30}payment|proceed.{0,20}pay|भुगतान.{0,20}(?:आगे|जारी)/i.test(element.label),
-        );
-
-        if (continueToPayment && !hasVisiblePaymentForm(currentSnapshot)) {
-          action = {
-            action: "click",
-            id: continueToPayment.id,
-            rationale: "Opening the payment page; payment is not complete yet.",
-          };
-        } else {
-          action = {
-            action: "ask_user",
-            question: hasVisiblePaymentForm(currentSnapshot)
-              ? "भुगतान फ़ॉर्म खुला है। कार्ड, UPI या अन्य गोपनीय जानकारी आप स्वयं भरें। भुगतान करना हो तो राशि जाँचकर पुष्टि करें।"
-              : "अभी भुगतान की रसीद दिखाई नहीं दे रही है, इसलिए मैं भुगतान पूरा होने की पुष्टि नहीं कर सकता। क्या आप चाहेंगे कि मैं अगला कदम जारी रखूँ?",
-            rationale: "भुगतान की पुष्टि के लिए रसीद दिखाई देनी चाहिए।",
-          };
-        }
-      }
-
-      const repeatableActionKey = getRepeatableActionKey(action);
-      if (repeatableActionKey && repeatableActionKey === lastSuccessfulRepeatableAction) {
-        const duplicateNotice = ({
-          "hi-IN": "यह कार्रवाई पहले ही पूरी हो चुकी है। मैं इसे दोबारा नहीं करूँगा।",
-          "ta-IN": "இந்தச் செயலை ஏற்கனவே செய்துவிட்டேன். மீண்டும் செய்யமாட்டேன்.",
-          "te-IN": "ఈ చర్య ఇప్పటికే పూర్తయింది. దీన్ని మళ్లీ చేయను.",
-          "kn-IN": "ಈ ಕ್ರಿಯೆಯನ್ನು ಈಗಾಗಲೇ ಮಾಡಿದ್ದೇನೆ. ಮತ್ತೆ ಮಾಡುವುದಿಲ್ಲ.",
-          "mr-IN": "ही कृती आधीच पूर्ण झाली आहे. मी ती पुन्हा करणार नाही.",
-          "gu-IN": "આ ક્રિયા પહેલેથી થઈ ગઈ છે. હું તેને ફરીથી નહીં કરું.",
-          "bn-IN": "এই কাজটি আগেই করা হয়েছে। আমি এটি আবার করব না।",
-          "pa-IN": "ਇਹ ਕਾਰਵਾਈ ਪਹਿਲਾਂ ਹੀ ਹੋ ਚੁੱਕੀ ਹੈ। ਮੈਂ ਇਸਨੂੰ ਦੁਬਾਰਾ ਨਹੀਂ ਕਰਾਂਗਾ।",
-          "ml-IN": "ഈ പ്രവർത്തനം ഇതിനകം പൂർത്തിയായി. ഇത് വീണ്ടും ചെയ്യില്ല.",
-        } as Record<string, string>)[resolveSpeechLanguage(settings.languageCode, taskGoal)] || "That action is already complete. I will not repeat it.";
-        if (repeatableActionKey === lastSkippedRepeatedAction) {
-          await speakStatus(duplicateNotice);
-          break;
-        }
-        lastSkippedRepeatedAction = repeatableActionKey;
-        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: duplicateNotice }].slice(-6);
-        await speakStatus(duplicateNotice);
-        currentSnapshot = await fetchPageSnapshot(activeTabId);
-        continue;
-      }
-
-      // 3. Inspect Action Safety
-      const safety = inspectActionSafety(action, currentSnapshot);
-
-      // SENSITIVE FIELD BLOCKED
-      if (!safety.permitted) {
-        const speech = safety.safetyAlertSpeech || "This field contains sensitive information. Please fill it manually.";
-        const entry: StepLogEntry = {
-          stepNumber: stepCount,
-          action,
-          status: "blocked",
-          spokenSummary: speech,
-          details: safety.reason,
-          timestamp: Date.now(),
-        };
-        setSteps((prev) => [...prev, entry]);
-        await speakStatus(speech);
-        break;
-      }
-
-      // SUBMIT / PAYMENT CONFIRMATION GATING
-      if (safety.requiresConfirmation) {
-        setStatus("confirmation");
-        const confirmSpeech = safety.safetyAlertSpeech || "Do you want to confirm this action? Say yes to continue.";
-        setStatusText(translate("Waiting for confirmation", "पुष्टि की प्रतीक्षा है"));
-        setPendingConfirmationAction(action);
-        setConfirmationMessage(confirmSpeech);
-
-        const entry: StepLogEntry = {
-          stepNumber: stepCount,
-          action,
-          status: "confirmation_required",
-          spokenSummary: confirmSpeech,
-          details: safety.reason,
-          timestamp: Date.now(),
-        };
-        setSteps((prev) => [...prev, entry]);
-
-        await speakStatus(confirmSpeech);
-        // Wait for user to say "haan" / "yes" or click confirm button
-        return; // Pause loop until confirmation event
-      }
-
-      // Check for DONE action
-      if (action.action === "done") {
-        const entry: StepLogEntry = {
-          stepNumber: stepCount,
-          action,
-          status: "success",
-          spokenSummary: action.summary,
-          timestamp: Date.now(),
-        };
-        setSteps((prev) => [...prev, entry]);
-        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: action.summary }].slice(-6);
-        await speakStatus(action.summary);
-        setStatus("idle");
-        setStatusText(translate("Completed", "पूरा हुआ"));
-        taskGoalRef.current = null;
-        conversationRef.current = [];
-        awaitingUserReplyRef.current = false;
-        break;
-      }
-
-      // Check for ASK_USER action
-      if (action.action === "ask_user") {
-        const entry: StepLogEntry = {
-          stepNumber: stepCount,
-          action,
-          status: "success",
-          spokenSummary: action.question,
-          timestamp: Date.now(),
-        };
-        setSteps((prev) => [...prev, entry]);
-        conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: action.question }].slice(-6);
-        awaitingUserReplyRef.current = true;
-        await speakStatus(action.question);
-        setStatus("idle");
-        setStatusText(translate("Awaiting response", "जवाब की प्रतीक्षा है"));
-        break;
-      }
-
-      // 4. Execute Action in Tab
-      setStatus("executing");
-      setStatusText(`${translate("Step", "स्टेप")} ${stepCount}: ${translate("Executing", "कार्रवाई हो रही है")} ${action.action}...`);
-
-      const execResponse = await sendTabMessage<{ ok?: boolean; error?: string; freshSnapshot?: PageSnapshot }>(activeTabId, {
-        type: "BV_EXECUTE_ACTION",
-        action,
-      });
-
-      if (!execResponse?.ok) {
-        const err = execResponse?.error || "Action execution failed.";
-        if (/element id \[\d+\] was not found in the current page/i.test(err) && !refreshedAfterStaleElement) {
-          refreshedAfterStaleElement = true;
-          setStatus("thinking");
-          setStatusText(translate("Page changed; refreshing before retrying...", "पेज बदल गया है; दोबारा कोशिश करने से पहले रीफ़्रेश कर रहे हैं..."));
-          try {
-            currentSnapshot = await fetchPageSnapshot(activeTabId);
-            stepCount -= 1;
-            continue;
-          } catch {
-            // Fall through and report the original action failure if the page cannot be refreshed.
-          }
-        }
-        setSteps((prev) => [
-          ...prev,
-          {
-            stepNumber: stepCount,
-            action,
-            status: "failed",
-            details: err,
-            timestamp: Date.now(),
-          },
-        ]);
-          const failurePrefix = ({
-            "hi-IN": "कार्रवाई पूरी नहीं हुई:", "ta-IN": "செயல் தோல்வியடைந்தது:", "te-IN": "చర్య విఫలమైంది:",
-            "kn-IN": "ಕ್ರಿಯೆ ವಿಫಲವಾಗಿದೆ:", "mr-IN": "कृती अयशस्वी झाली:", "gu-IN": "ક્રિયા નિષ્ફળ ગઈ:",
-            "bn-IN": "কাজটি ব্যর্থ হয়েছে:", "pa-IN": "ਕਾਰਵਾਈ ਅਸਫਲ ਰਹੀ:", "ml-IN": "പ്രവർത്തനം പരാജയപ്പെട്ടു:",
-          } as Record<string, string>)[resolveSpeechLanguage(settings.languageCode, taskGoal)] || "Action failed:";
-          await speakStatus(`${failurePrefix} ${err}`);
-        break;
-      }
-
-      lastSuccessfulRepeatableAction = repeatableActionKey;
-      lastSkippedRepeatedAction = null;
-
-      // Record successful step
-      const outcomeSpeech = getActionOutcomeSpeech(action, currentSnapshot);
-      conversationRef.current = [...conversationRef.current, { role: "assistant" as const, content: outcomeSpeech }].slice(-6);
-      setSteps((prev) => [
-        ...prev,
-        {
-          stepNumber: stepCount,
-          action,
-          status: "success",
-          spokenSummary: outcomeSpeech,
-          timestamp: Date.now(),
-        },
-      ]);
-
-      // Speak the result after the page action has completed.
-      await speakStatus(outcomeSpeech);
-
-      // Re-observe
-      if (execResponse.freshSnapshot) {
-        currentSnapshot = execResponse.freshSnapshot;
-      } else {
-        currentSnapshot = await fetchPageSnapshot(activeTabId);
-      }
-    }
-
-    if (stepCount >= MAX_STEPS) {
-      await speakStatus("The maximum of 15 steps has been reached. The task was stopped.");
-    }
-  };
-
-    */
-  };
-  /**
-   * Resumes the loop after the user gives confirmation for submit/payment
-   */
-  /* const confirmAndResumeAction = async () => {
-    if (!pendingConfirmationAction || !activeTabId) return;
-    const actionToRun = pendingConfirmationAction;
-    setPendingConfirmationAction(null);
-    setConfirmationMessage("");
-
-    setStatus("executing");
-      setStatusText(translate("Executing confirmed action...", "पुष्टि की गई कार्रवाई हो रही है..."));
-
-    let execResponse: { ok?: boolean; error?: string; result?: { success?: boolean; error?: string }; freshSnapshot?: PageSnapshot } | undefined;
-    try {
-      execResponse = await sendTabMessage(activeTabId, {
-        type: "BV_EXECUTE_ACTION",
-        action: actionToRun,
-      });
-    } catch (error) {
-      execResponse = { ok: false, error: error instanceof Error ? error.message : "The confirmed action could not be completed." };
-    }
-
-    if (!execResponse?.ok || execResponse.result?.success === false) {
-      const error = execResponse?.error || execResponse?.result?.error || "The page did not complete the confirmed action.";
-      setSteps((previous) => [...previous, {
-        stepNumber: previous.length + 1,
-        action: actionToRun,
-        status: "failed",
-        details: error,
-        timestamp: Date.now(),
-      }]);
-      await speakStatus(`कार्रवाई पूरी नहीं हुई: ${error}`);
-      setStatus("idle");
-      setStatusText(translate("Action could not be completed", "कार्रवाई पूरी नहीं हो सकी"));
-      awaitingUserReplyRef.current = true;
-      return;
-    }
-
-    const freshSnapshot = execResponse.freshSnapshot || await fetchPageSnapshot(activeTabId);
-    const paymentReceiptVisible = hasPaymentReceipt(freshSnapshot.summary);
-    const paymentLanguage = resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript);
-    const paymentConfirmations: Record<string, { receipt: string; continued: string }> = {
-      "en-IN": { receipt: "The payment receipt is visible. Payment is confirmed.", continued: "The confirmed action is complete. I am checking the next step." },
-      "hi-IN": { receipt: "भुगतान की रसीद दिखाई दे रही है। भुगतान की पुष्टि हो गई है।", continued: "पुष्टि की गई कार्रवाई पूरी हुई। अब अगला कदम जाँच रहा हूँ।" },
-      "ta-IN": { receipt: "கட்டண ரசீது தெரிகிறது. கட்டணம் உறுதிப்படுத்தப்பட்டது.", continued: "உறுதிப்படுத்திய செயல் முடிந்தது. அடுத்த படியைச் சரிபார்க்கிறேன்." },
-      "te-IN": { receipt: "చెల్లింపు రసీదు కనిపిస్తోంది. చెల్లింపు నిర్ధారించబడింది.", continued: "ధృవీకరించిన చర్య పూర్తయింది. తదుపరి దశను చూస్తున్నాను." },
-      "kn-IN": { receipt: "ಪಾವತಿ ರಸೀದಿ ಕಾಣುತ್ತಿದೆ. ಪಾವತಿ ದೃಢವಾಗಿದೆ.", continued: "ದೃಢೀಕರಿಸಿದ ಕ್ರಿಯೆ ಪೂರ್ಣಗೊಂಡಿದೆ. ಮುಂದಿನ ಹಂತವನ್ನು ಪರಿಶೀಲಿಸುತ್ತಿದ್ದೇನೆ." },
-      "mr-IN": { receipt: "पेमेंटची पावती दिसत आहे. पेमेंटची पुष्टी झाली.", continued: "पुष्टी केलेली कृती पूर्ण झाली. पुढील टप्पा तपासत आहे." },
-      "gu-IN": { receipt: "ચુકવણીની રસીદ દેખાય છે. ચુકવણીની પુષ્ટિ થઈ છે.", continued: "પુષ્ટિ કરેલી ક્રિયા પૂર્ણ થઈ. હવે આગળનું પગલું તપાસું છું." },
-      "bn-IN": { receipt: "পেমেন্টের রসিদ দেখা যাচ্ছে। পেমেন্ট নিশ্চিত হয়েছে।", continued: "নিশ্চিত করা কাজটি শেষ হয়েছে। পরের ধাপ দেখছি।" },
-      "pa-IN": { receipt: "ਭੁਗਤਾਨ ਦੀ ਰਸੀਦ ਦਿਖ ਰਹੀ ਹੈ। ਭੁਗਤਾਨ ਦੀ ਪੁਸ਼ਟੀ ਹੋ ਗਈ ਹੈ।", continued: "ਪੁਸ਼ਟੀ ਕੀਤੀ ਕਾਰਵਾਈ ਪੂਰੀ ਹੋ ਗਈ। ਹੁਣ ਅਗਲਾ ਕਦਮ ਦੇਖ ਰਿਹਾ ਹਾਂ।" },
-      "ml-IN": { receipt: "പണമടച്ച രസീത് കാണുന്നു. പണമടച്ചത് സ്ഥിരീകരിച്ചു.", continued: "സ്ഥിരീകരിച്ച നടപടി പൂർത്തിയായി. അടുത്ത ഘട്ടം പരിശോധിക്കുന്നു." },
-    };
-    const confirmationCopy = paymentConfirmations[paymentLanguage] || paymentConfirmations["en-IN"];
-    const actionSummary = paymentReceiptVisible ? confirmationCopy.receipt : confirmationCopy.continued;
-    const nextStep: StepLogEntry = {
-      stepNumber: stepsRef.current.length + 1,
-      action: actionToRun,
-      status: "success",
-      spokenSummary: actionSummary,
-      timestamp: Date.now(),
-    };
-    const nextSteps = [...stepsRef.current, nextStep];
-    stepsRef.current = nextSteps;
-    setSteps(nextSteps);
-
-    if (paymentReceiptVisible) {
-      await speakStatus(actionSummary);
-      setStatus("idle");
-      setStatusText(translate("Payment receipt confirmed", "भुगतान की रसीद की पुष्टि हुई"));
-      taskGoalRef.current = null;
-      conversationRef.current = [];
-      awaitingUserReplyRef.current = false;
-    }
-    conversationRef.current = [...conversationRef.current, {
-      role: "assistant" as const,
-      content: "The confirmed action ran, but no payment receipt is visible yet. Continue by inspecting the current page; do not report payment as complete.",
-    }].slice(-6);
-    setStatus("thinking");
-    setStatusText(translate("Checking the next step...", "अगला कदम देख रहे हैं..."));
-    awaitingUserReplyRef.current = true;
-    await runAgentLoop("", true);
-  }; */
+  const startTaskRun = async (initialRequest: string, resumeExistingTask = false) => runParallelTask(initialRequest, resumeExistingTask);
 
   const runAgentLoop = async (initialRequest: string, resumeExistingTask = false) => startTaskRun(initialRequest, resumeExistingTask);
 
@@ -1921,6 +1566,29 @@ export const App: React.FC = () => {
     setConfirmationMessage("");
     const result = await resumeAgentTask(context, confirmed, answer);
     if (result.status === "waiting_confirmation") enqueueConfirmation(taskId);
+    else if (result.status === "waiting_question") enqueueQuestion(taskId);
+    else publishTaskCard(taskId, { status: result.status, summary: result.summary, error: result.error });
+    await maybeSpeakCombinedSummary();
+  };
+
+  const reaskConfirmation = async (taskId: string) => {
+    const context = taskContextsRef.current.get(taskId);
+    const message = context?.pendingConfirmation?.message;
+    if (!message) return;
+    setStatus("confirmation");
+    setStatusText(translate("Please answer yes or no", "कृपया हाँ या नहीं कहें"));
+    await speakStatus(message);
+  };
+
+  const answerTask = async (answer: string) => {
+    const taskId = activeQuestionTaskId || questionQueueRef.current[0];
+    if (!taskId || !answer.trim()) return;
+    const context = taskContextsRef.current.get(taskId);
+    if (!context) { advanceQuestionQueue(); return; }
+    advanceQuestionQueue();
+    const result = await resumeAgentTask(context, true, answer.trim());
+    if (result.status === "waiting_question") enqueueQuestion(taskId);
+    else if (result.status === "waiting_confirmation") enqueueConfirmation(taskId);
     else publishTaskCard(taskId, { status: result.status, summary: result.summary, error: result.error });
     await maybeSpeakCombinedSummary();
   };
@@ -1994,14 +1662,15 @@ export const App: React.FC = () => {
         handleEmergencyStop();
         return;
       }
-      if (activeConfirmationTaskId) {
-        const taskContext = taskContextsRef.current.get(activeConfirmationTaskId);
-        if (taskContext?.pendingQuestion) {
+      if (activeQuestionTaskId) {
+        await answerTask(text);
+      } else if (activeConfirmationTaskId) {
+        if (isConfirmationCommand(text)) {
           await confirmTask(true, text);
-        } else if (isConfirmationCommand(text)) {
-          await confirmTask(true, text);
-        } else {
+        } else if (isCancellationCommand(text)) {
           await confirmTask(false, text);
+        } else {
+          await reaskConfirmation(activeConfirmationTaskId);
         }
       } else {
         await handleUserRequestSafely(text);
@@ -2060,11 +1729,15 @@ export const App: React.FC = () => {
       return;
     }
 
+    if (activeQuestionTaskId) {
+      void answerTask(prompt);
+      return;
+    }
+
     if (activeConfirmationTaskId) {
-      const taskContext = taskContextsRef.current.get(activeConfirmationTaskId);
-      if (taskContext?.pendingQuestion) void confirmTask(true, prompt);
-      else if (isConfirmationCommand(prompt)) void confirmTask(true, prompt);
-      else void confirmTask(false, prompt);
+      if (isConfirmationCommand(prompt)) void confirmTask(true, prompt);
+      else if (isCancellationCommand(prompt)) void confirmTask(false, prompt);
+      else void reaskConfirmation(activeConfirmationTaskId);
       return;
     }
 
@@ -2090,6 +1763,7 @@ export const App: React.FC = () => {
       queued: ["Queued", "कतार में"],
       running: ["Running", "चल रहा है"],
       waiting_confirmation: ["Waiting for confirmation", "पुष्टि की प्रतीक्षा"],
+      waiting_question: ["Question", "सवाल"],
       blocked: ["Blocked", "रुका हुआ"],
       done: ["Done", "पूरा हुआ"],
       failed: ["Failed", "विफल"],
@@ -2143,7 +1817,7 @@ export const App: React.FC = () => {
       </header>
 
       {/* Keep consequential action confirmations visible outside the scroll area. */}
-      {activeConfirmationTaskId && (pendingConfirmationAction || taskContextsRef.current.get(activeConfirmationTaskId)?.pendingQuestion) && (
+      {activeConfirmationTaskId && pendingConfirmationAction && (
         <div className="confirmation-box" role="alert">
           <div className="confirmation-header">
             <span className="alert-mark" aria-hidden="true">!</span>
@@ -2152,7 +1826,7 @@ export const App: React.FC = () => {
           <p className="confirmation-text">
             <strong>{taskViewsRef.current.get(activeConfirmationTaskId)?.label}</strong>{" · "}
             {taskViewsRef.current.get(activeConfirmationTaskId)?.tabTitle || translate("Controlled tab", "नियंत्रित टैब")}<br />
-            {confirmationMessage || taskContextsRef.current.get(activeConfirmationTaskId)?.pendingQuestion}
+            {confirmationMessage}
           </p>
           <div className="confirmation-actions">
             <button className="btn-confirm-yes" onClick={() => void confirmTask(true, "yes")}>
@@ -2165,6 +1839,30 @@ export const App: React.FC = () => {
               ✕ {translate("Cancel", "रद्द करें")}
             </button>
           </div>
+        </div>
+      )}
+
+      {activeQuestionTaskId && taskContextsRef.current.get(activeQuestionTaskId)?.pendingQuestion && (
+        <div className="question-box" role="dialog" aria-label="Question">
+          <div className="confirmation-header">
+            <span className="alert-mark" aria-hidden="true">?</span>
+            <span>{translate("Question", "सवाल")}</span>
+          </div>
+          <p className="confirmation-text">
+            <strong>{taskViewsRef.current.get(activeQuestionTaskId)?.label}</strong>{" · "}
+            {taskViewsRef.current.get(activeQuestionTaskId)?.tabTitle || translate("Controlled tab", "नियंत्रित टैब")}<br />
+            {taskContextsRef.current.get(activeQuestionTaskId)?.pendingQuestion}
+          </p>
+          <form className="question-answer-row" onSubmit={(event) => { event.preventDefault(); if (questionAnswer.trim()) { void answerTask(questionAnswer); setQuestionAnswer(""); } }}>
+            <input
+              className="input-text"
+              value={questionAnswer}
+              onChange={(event) => setQuestionAnswer(event.target.value)}
+              placeholder={translate("Type your answer...", "अपना जवाब लिखें...")}
+              autoFocus
+            />
+            <button className="btn-primary" type="submit">{translate("Answer", "जवाब")}</button>
+          </form>
         </div>
       )}
 

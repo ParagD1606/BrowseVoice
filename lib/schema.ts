@@ -5,6 +5,7 @@
  *  - click(id)
  *  - type(id, text)
  *  - select(id, value)
+ *  - press_key(key)
  *  - scroll(direction)
  *  - navigate(url)
  *  - ask_user(question)
@@ -15,6 +16,7 @@ export type ActionType =
   | "click"
   | "type"
   | "select"
+  | "press_key"
   | "scroll"
   | "navigate"
   | "ask_user"
@@ -49,6 +51,12 @@ export interface SelectAction {
   rationale?: string;
 }
 
+export interface PressKeyAction {
+  action: "press_key";
+  key: string;
+  rationale?: string;
+}
+
 export interface ScrollAction {
   action: "scroll";
   direction: ScrollDirection;
@@ -79,6 +87,7 @@ export type PlannerAction =
   | ClickAction
   | TypeAction
   | SelectAction
+  | PressKeyAction
   | ScrollAction
   | NavigateAction
   | AskUserAction
@@ -206,6 +215,14 @@ export const PLANNER_JSON_SCHEMA = {
     },
     {
       properties: {
+        action: { const: "press_key" },
+        key: { type: "string", minLength: 1, description: "Keyboard key to send to the focused element" },
+        rationale: { type: "string" },
+      },
+      required: ["action", "key"],
+    },
+    {
+      properties: {
         action: { const: "scroll" },
         direction: { enum: ["up", "down", "left", "right"] },
         amount: { type: "integer", minimum: 50 },
@@ -292,6 +309,13 @@ export function validatePlannerAction(input: unknown): ValidationResult {
       return { valid: true, action: { action: "scroll", direction: dir, amount, rationale } };
     }
 
+    case "press_key": {
+      if (typeof raw.key !== "string" || !raw.key.trim() || raw.key.trim().length > 40) {
+        return { valid: false, error: "action 'press_key' requires a non-empty 'key' of at most 40 characters." };
+      }
+      return { valid: true, action: { action: "press_key", key: raw.key.trim(), rationale } };
+    }
+
     case "navigate": {
       if (typeof raw.url !== "string" || raw.url.trim().length === 0) {
         return { valid: false, error: "action 'navigate' requires a non-empty string 'url'." };
@@ -322,7 +346,7 @@ export function validatePlannerAction(input: unknown): ValidationResult {
     default:
       return {
         valid: false,
-        error: `Unknown action '${String(action)}'. Allowed actions: click, type, select, scroll, navigate, ask_user, done.`,
+        error: `Unknown action '${String(action)}'. Allowed actions: click, type, select, press_key, scroll, navigate, ask_user, done.`,
       };
   }
 }

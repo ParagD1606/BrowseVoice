@@ -16,6 +16,7 @@ import {
   type InteractiveElement,
   type PageSnapshot,
 } from "../lib/safety";
+import { hasPaymentReceipt } from "../lib/payment-state";
 
 // Store assigned DOM element references in a WeakMap / Map keyed by numeric ID
 const elementRegistry = new Map<number, HTMLElement>();
@@ -123,23 +124,18 @@ function collectInteractiveCandidates(root: Document | ShadowRoot): HTMLElement[
  * Generates a concise textual summary of the visible page.
  */
 function extractPageSummary(): string {
-  const headings = Array.from(document.querySelectorAll("h1, h2, h3, .bill-amount, .status-badge"))
+  const headings = Array.from(document.querySelectorAll("h1, h2, h3"))
     .filter((el) => isElementVisible(el as HTMLElement))
     .map((el) => (el as HTMLElement).innerText?.trim())
     .filter(Boolean)
     .slice(0, 6)
     .join(" | ");
 
-  const bodyText = document.body?.innerText?.replace(/\s+/g, " ").slice(0, 400) || "";
-  const receipt = document.querySelector<HTMLElement>("#section-receipt, [data-payment-receipt]");
-  const receiptText = receipt && isElementVisible(receipt)
-    ? receipt.innerText.replace(/\s+/g, " ")
+  const fullBodyText = document.body?.innerText?.replace(/\s+/g, " ") || "";
+  const bodyText = fullBodyText.slice(0, 400);
+  const receiptEvidence = hasPaymentReceipt(fullBodyText)
+    ? "Visible payment receipt or order confirmation evidence detected."
     : "";
-  const receiptEvidence =
-    /payment\s+successful|भुगतान\s+सफल/i.test(receiptText) &&
-    /transaction\s*(?:id|no\.?|number)|receipt|रसीद|लेन.?देन/i.test(receiptText)
-      ? "Visible payment receipt: Payment Successful; Transaction ID present."
-      : "";
 
   return [headings ? `${headings} - ${bodyText}` : bodyText, receiptEvidence]
     .filter(Boolean)

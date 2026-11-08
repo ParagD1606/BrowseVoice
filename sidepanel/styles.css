@@ -438,10 +438,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .chat-message p { color: #dce6f2; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
 
 .confirmation-box { display: flex; flex-direction: column; gap: 10px; padding: 13px; border: 1px solid rgba(240,189,114,.28); border-radius: var(--r-md); background: rgba(181,120,43,.1); animation: bvFadeIn .22s ease-out; }
+.question-box { display: flex; flex-direction: column; gap: 10px; padding: 13px; border: 1px solid rgba(114,170,255,.3); border-radius: var(--r-md); background: rgba(76,140,240,.1); animation: bvFadeIn .22s ease-out; }
 .confirmation-header { gap: 8px; color: var(--amber); font-size: 12px; font-weight: 750; }
 .confirmation-text { color: #e8edf4; font-size: 12px; line-height: 1.5; }
 .confirmation-actions { gap: 8px; margin-top: 1px; }
 .confirmation-actions button { flex: 1; min-height: 36px; }
+.question-answer-row { display: flex; gap: 7px; width: 100%; }
+.question-answer-row .input-text { min-height: 36px; }
 .btn-confirm-no { padding: 8px; color: var(--muted); border: 1px solid var(--line); background: var(--raised); font-size: 12px; }
 .btn-confirm-no:hover { color: var(--ink); border-color: var(--line-strong); }
 @keyframes bvFadeIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
@@ -481,6 +484,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .task-card { padding: 10px 11px; border: 1px solid var(--line); border-radius: 12px; background: #151d2b; }
 .task-card.running { border-color: rgba(114,170,255,.35); }
 .task-card.waiting_confirmation { border-color: rgba(240,189,114,.55); }
+.task-card.waiting_question { border-color: rgba(114,170,255,.55); }
 .task-card.blocked, .task-card.failed { border-color: rgba(255,135,148,.4); }
 .task-card.done { border-color: rgba(82,209,164,.35); }
 .task-card-header, .task-card-identity, .task-status-row { display: flex; align-items: center; }
@@ -497,6 +501,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .task-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--subtle); }
 .task-status-dot.running { background: var(--blue); }
 .task-status-dot.waiting_confirmation { background: var(--amber); }
+.task-status-dot.waiting_question { background: var(--blue); }
 .task-status-dot.blocked, .task-status-dot.failed { background: var(--red); }
 .task-status-dot.done { background: var(--green); }
 .task-current-step { margin-top: 4px; overflow: hidden; color: #c1ccd9; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }

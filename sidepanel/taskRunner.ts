@@ -12,6 +12,7 @@ export type TaskRunnerStatus =
   | "queued"
   | "running"
   | "waiting_confirmation"
+  | "waiting_question"
   | "blocked"
   | "done"
   | "failed"
@@ -168,7 +169,7 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
   let currentSnapshot = initialSnapshot || await fetchSnapshot(context);
   let lastSuccessfulRepeatableAction: string | null = null;
   let lastSkippedRepeatedAction: string | null = null;
-  let refreshedAfterStaleElement = false;
+  let staleElementRetries = 0;
 
   for (let stepNumber = context.steps.length + 1; stepNumber <= context.maxSteps; stepNumber += 1) {
     if (isAborted(context)) return { status: "stopped", context };
@@ -234,9 +235,9 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
       context.pendingQuestion = action.question;
       context.conversation = [...context.conversation, { role: "assistant" as const, content: action.question }].slice(-6);
       appendStep(context, { stepNumber, action, status: "success", spokenSummary: action.question, timestamp: Date.now() });
-      emitStatus(context, "waiting_confirmation", action.question);
+      emitStatus(context, "waiting_question", action.question);
       await context.callbacks?.onPrompt?.(action.question, "question");
-      return { status: "waiting_confirmation", context };
+      return { status: "waiting_question", context };
     }
 
     emitStatus(context, "running", `Step ${stepNumber}: executing ${action.action}`);
@@ -249,8 +250,8 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
 
     if (!response?.ok || response.result?.success === false) {
       const error = response?.error || response?.result?.error || "Action execution failed.";
-      if (/element id \[\d+\] was not found in the current page/i.test(error) && !refreshedAfterStaleElement) {
-        refreshedAfterStaleElement = true;
+      if (/element id \[\d+\] was not found in the current page/i.test(error) && staleElementRetries < 3) {
+        staleElementRetries += 1;
         currentSnapshot = await fetchSnapshot(context);
         stepNumber -= 1;
         continue;
@@ -262,6 +263,7 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
 
     lastSuccessfulRepeatableAction = key;
     lastSkippedRepeatedAction = null;
+    staleElementRetries = 0;
     const speech = outcomeSpeech(action, currentSnapshot);
     context.conversation = [...context.conversation, { role: "assistant" as const, content: speech }].slice(-6);
     appendStep(context, { stepNumber, action, status: "success", spokenSummary: speech, timestamp: Date.now() });
@@ -321,8 +323,8 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
   }
 
   if (context.pendingQuestion) {
+    if (!answer?.trim()) return { status: "waiting_question", context };
     context.pendingQuestion = null;
-    if (!answer?.trim()) return { status: "waiting_confirmation", context };
     context.conversation = [...context.conversation, { role: "user" as const, content: answer.trim() }].slice(-6);
     emitStatus(context, "running", "Continuing task");
     try { return await runLoop(context); } catch (error) {
