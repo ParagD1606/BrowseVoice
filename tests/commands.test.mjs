@@ -20,7 +20,7 @@ import {
   isConfirmationCommand,
   isCancellationCommand,
 } from "../lib/safety.ts";
-import { hasPaymentReceipt } from "../lib/payment-state.ts";
+import { hasPaymentReceipt, isPaymentIntent } from "../lib/payment-state.ts";
 
 // Synthetic initial Page Snapshot of BijliSeva Mock Portal
 const MOCK_PORTAL_LOOKUP_SNAPSHOT = {
@@ -302,6 +302,15 @@ test("payment completion recognizes generic visible receipt evidence", () => {
   assert.equal(hasPaymentReceipt("Transaction ID: TX-123"), true);
   assert.equal(hasPaymentReceipt("Receipt available"), true);
   assert.equal(hasPaymentReceipt("Payment Gateway | Payment Successful | Visible payment receipt: Transaction ID present."), true);
+});
+
+test("form editing instructions do not require a payment receipt", () => {
+  for (const request of ["fill the checkout form", "complete the payment form", "edit the checkout form"]) {
+    assert.equal(isPaymentIntent(request), false, request);
+  }
+  for (const request of ["pay now", "buy this", "place order"]) {
+    assert.equal(isPaymentIntent(request), true, request);
+  }
 });
 
 test("the latest follow-up is retained when the mock planner handles payment confirmation", async () => {

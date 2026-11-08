@@ -99,6 +99,16 @@ export function buildGuidance(reason: GuidanceReason, context: GuidanceContext =
           : [action(context, "Continue 15 more steps", "15 चरण और जारी रखें", "continue_more")],
       };
     case "repeated_action":
+      return {
+        reason,
+        title: title("I already did that and nothing changed", "मैंने यह पहले ही किया था और कुछ नहीं बदला"),
+        whatHappened: context.error || line("The same action was suggested again without a clear change.", "वही कार्रवाई फिर सुझाई गई, लेकिन कोई स्पष्ट बदलाव नहीं हुआ।"),
+        whatToDo: [
+          line(`I currently see ${context.pageTitle || "the current page"}. ${context.pageSummary || "The page summary is unavailable."}`, `अभी मुझे ${context.pageTitle || "वर्तमान पेज"} दिख रहा है। ${context.pageSummary || "पेज का सार उपलब्ध नहीं है।"}`),
+          line("Tell me the next button, scroll to the right place, or open the correct page and say continue.", "अगला बटन बताएं, सही जगह स्क्रॉल करें, या सही पेज खोलकर continue कहें।"),
+        ],
+        actions: [action(context, "Continue", "जारी रखें", "resume"), action(context, "Retry", "फिर कोशिश करें", "retry")],
+      };
     case "no_progress":
       return {
         reason,

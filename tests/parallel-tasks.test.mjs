@@ -220,14 +220,14 @@ test("every guidance reason has short English and Hindi guidance", async () => {
   }
 });
 
-test("three unchanged clicks pause before another planner call", async () => {
+test("three unchanged clicks pause as repeated action", async () => {
   let plans = 0;
   const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return { action: "click", id: 2 }; } };
   const context = createTaskRunnerContext({ tabId: 11, goal: "make progress", planner, sendTabMessage: fakeTransport() });
   const result = await runAgentTask(context);
   assert.equal(result.status, "paused");
-  assert.equal(result.context.guidance?.reason, "no_progress");
-  assert.equal(plans, 3);
+  assert.equal(result.context.guidance?.reason, "repeated_action");
+  assert.equal(plans, 2);
 });
 
 test("filling four text fields reaches done without a false no-progress pause", async () => {
@@ -263,13 +263,76 @@ test("three scroll actions do not trigger no-progress", async () => {
   assert.equal(context.unchangedFingerprintCount, 0);
 });
 
-test("three unchanged clicks on one button pause with no-progress", async () => {
+test("three unchanged clicks on one button pause with repeated-action guidance", async () => {
   let plans = 0;
   const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return { action: "click", id: 2 }; } };
   const context = createTaskRunnerContext({ tabId: 19, goal: "click unchanged button", planner, sendTabMessage: fakeTransport() });
   const result = await runAgentTask(context);
   assert.equal(result.status, "paused");
-  assert.equal(result.context.guidance?.reason, "no_progress");
+  assert.equal(result.context.guidance?.reason, "repeated_action");
+  assert.equal(plans, 2);
+});
+
+test("the same click twice with no page change pauses with repeated-action guidance", async () => {
+  let plans = 0;
+  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return { action: "click", id: 2 }; } };
+  const context = createTaskRunnerContext({ tabId: 21, goal: "click the button", planner, sendTabMessage: fakeTransport() });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "paused");
+  assert.equal(result.context.guidance?.reason, "repeated_action");
+  assert.match(result.context.guidance?.title || "", /already did that/i);
+  assert.equal(plans, 2);
+});
+
+test("repeated Next pagination is allowed when the page changed", async () => {
+  let page = 1;
+  let plans = 0;
+  let executions = 0;
+  const nextSnapshot = () => ({ ...baseSnapshot, summary: `Results page ${page}`, interactiveElements: [{ id: 1, tag: "button", role: "button", label: "Next", isSensitive: false }] });
+  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return plans <= 2 ? { action: "click", id: 1 } : { action: "done", summary: "pagination completed" }; } };
+  const transport = async (_tabId, message) => {
+    if (message.type === "BV_GET_SNAPSHOT") return { ok: true, snapshot: nextSnapshot() };
+    if (message.type === "BV_EXECUTE_ACTION") {
+      executions += 1;
+      page += 1;
+      return { ok: true, result: { success: true }, freshSnapshot: nextSnapshot() };
+    }
+    return { ok: true };
+  };
+  const context = createTaskRunnerContext({ tabId: 22, goal: "click Next twice", planner, sendTabMessage: transport });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "done");
+  assert.equal(executions, 2);
+  assert.equal(plans, 3);
+});
+
+test("repeated Add to cart is blocked even if the control changes the page", async () => {
+  let plans = 0;
+  let page = 1;
+  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return { action: "click", id: 2 }; } };
+  const cartSnapshot = () => ({ ...baseSnapshot, summary: `Product ${page}`, interactiveElements: [{ id: 2, tag: "button", role: "button", label: "Add to cart", isSensitive: false }] });
+  const transport = async (_tabId, message) => {
+    if (message.type === "BV_GET_SNAPSHOT") return { ok: true, snapshot: cartSnapshot() };
+    if (message.type === "BV_EXECUTE_ACTION") {
+      page += 1;
+      return { ok: true, result: { success: true }, freshSnapshot: cartSnapshot() };
+    }
+    return { ok: true };
+  };
+  const context = createTaskRunnerContext({ tabId: 23, goal: "add to cart", planner, sendTabMessage: transport });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "paused");
+  assert.equal(result.context.guidance?.reason, "repeated_action");
+  assert.equal(plans, 2);
+});
+
+test("three identical non-scroll and non-type actions pause with repeated-action guidance", async () => {
+  let plans = 0;
+  const planner = { id: "fake", name: "Fake", async plan() { plans += 1; return { action: "press_key", key: "Enter" }; } };
+  const context = createTaskRunnerContext({ tabId: 24, goal: "press Enter", planner, sendTabMessage: fakeTransport() });
+  const result = await runAgentTask(context);
+  assert.equal(result.status, "paused");
+  assert.equal(result.context.guidance?.reason, "repeated_action");
   assert.equal(plans, 3);
 });
 
@@ -328,14 +391,14 @@ test("a user hint resumes the same context and resets stuck counters", async () 
   };
   let changed = false;
   const transport = async (_tabId, message) => {
-    if (message.type === "BV_GET_SNAPSHOT") return { ok: true, snapshot: { ...baseSnapshot, summary: changed ? "changed" : "same" } };
-    if (message.type === "BV_EXECUTE_ACTION") return { ok: true, result: { success: true }, freshSnapshot: { ...baseSnapshot, summary: changed ? "changed" : "same" } };
+    if (message.type === "BV_GET_SNAPSHOT") return { ok: true, snapshot: { ...baseSnapshot, summary: changed ? "changed-before-action" : "same" } };
+    if (message.type === "BV_EXECUTE_ACTION") return { ok: true, result: { success: true }, freshSnapshot: { ...baseSnapshot, summary: changed ? "changed-after-action" : "same" } };
     return { ok: true };
   };
   const context = createTaskRunnerContext({ tabId: 13, goal: "continue after hint", planner, sendTabMessage: transport });
   const paused = await runAgentTask(context);
   assert.equal(paused.status, "paused");
-  assert.equal(context.guidance?.reason, "no_progress");
+  assert.equal(context.guidance?.reason, "repeated_action");
   changed = true;
   const resumed = await resumeAgentTask(context, true, "scroll down");
   assert.equal(resumed.status, "done");

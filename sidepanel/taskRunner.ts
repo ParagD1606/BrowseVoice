@@ -54,6 +54,8 @@ export interface TaskRunnerContext {
   failedActionCounts: Map<string, number>;
   recentActionKeys: string[];
   lastFingerprint: string | null;
+  lastExecutedActionKey: string | null;
+  lastExecutedBeforeFingerprint: string | null;
   stopRequested: boolean;
   callbacks?: TaskRunnerCallbacks;
   translate?: (english: string, hindi: string) => string;
@@ -75,7 +77,7 @@ interface ExecutionResponse {
 }
 
 export function createTaskRunnerContext(
-  input: Omit<TaskRunnerContext, "controller" | "steps" | "conversation" | "pendingConfirmation" | "pendingQuestion" | "pendingQuestionOptions" | "guidance" | "unchangedFingerprintCount" | "staleElementRetries" | "failedActionCounts" | "recentActionKeys" | "lastFingerprint" | "stopRequested" | "maxSteps" | "hardMaxSteps"> & { maxSteps?: number; hardMaxSteps?: number },
+  input: Omit<TaskRunnerContext, "controller" | "steps" | "conversation" | "pendingConfirmation" | "pendingQuestion" | "pendingQuestionOptions" | "guidance" | "unchangedFingerprintCount" | "staleElementRetries" | "failedActionCounts" | "recentActionKeys" | "lastFingerprint" | "lastExecutedActionKey" | "lastExecutedBeforeFingerprint" | "stopRequested" | "maxSteps" | "hardMaxSteps"> & { maxSteps?: number; hardMaxSteps?: number },
 ): TaskRunnerContext {
   const maxSteps = input.maxSteps ?? 15;
   return {
@@ -94,6 +96,8 @@ export function createTaskRunnerContext(
     failedActionCounts: new Map(),
     recentActionKeys: [],
     lastFingerprint: null,
+    lastExecutedActionKey: null,
+    lastExecutedBeforeFingerprint: null,
     stopRequested: false,
   };
 }
@@ -162,6 +166,27 @@ function outcomeSpeech(action: PlannerAction, snapshot: PageSnapshot): string {
 
 function actionKey(action: PlannerAction): string {
   return JSON.stringify(action);
+}
+
+function repeatableActionIdentity(action: PlannerAction, snapshot: PageSnapshot): { key: string; label: string } | null {
+  if (action.action === "click") {
+    const target = snapshot.interactiveElements.find((element) => element.id === action.id);
+    return { key: `click|${action.id}|${target?.label || ""}|${snapshot.url}`, label: target?.label || "" };
+  }
+  if (action.action === "navigate") {
+    return { key: `navigate|${action.url}|${action.url}|${snapshot.url}`, label: "" };
+  }
+  return null;
+}
+
+function isPaginationLabel(label: string): boolean {
+  return /\b(?:next|more|load\s+more|see\s+more|show\s+more|page\s*\d+|older|newer)\b|[›»→]/i.test(label);
+}
+
+function rememberExecutedAction(context: TaskRunnerContext, action: PlannerAction, beforeSnapshot: PageSnapshot, beforeFingerprint: string): void {
+  const identity = repeatableActionIdentity(action, beforeSnapshot);
+  context.lastExecutedActionKey = identity?.key || null;
+  context.lastExecutedBeforeFingerprint = identity ? beforeFingerprint : null;
 }
 
 function hashFingerprint(value: string): string {
@@ -256,11 +281,14 @@ async function fetchSnapshot(context: TaskRunnerContext): Promise<PageSnapshot> 
   return response.snapshot;
 }
 
-async function executeConfirmedAction(context: TaskRunnerContext, pending: PendingTaskConfirmation): Promise<ExecutionResponse> {
+async function executeConfirmedAction(context: TaskRunnerContext, pending: PendingTaskConfirmation): Promise<{ response: ExecutionResponse; beforeSnapshot: PageSnapshot }> {
   const freshSnapshot = await fetchSnapshot(context);
   const safety = inspectActionSafety(pending.action, freshSnapshot);
   if (!safety.permitted) throw new Error(safety.reason || "The confirmed action is no longer safe.");
-  return context.sendTabMessage<ExecutionResponse>(context.tabId, { type: "BV_EXECUTE_ACTION", action: pending.action });
+  return {
+    response: await context.sendTabMessage<ExecutionResponse>(context.tabId, { type: "BV_EXECUTE_ACTION", action: pending.action }),
+    beforeSnapshot: freshSnapshot,
+  };
 }
 
 async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapshot): Promise<TaskRunnerResult> {
@@ -291,6 +319,25 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
           pageTitle: currentSnapshot.title,
           pageSummary: currentSnapshot.summary.slice(0, 180),
         }, "waiting_user");
+      }
+    }
+
+    const repeatIdentity = repeatableActionIdentity(action, currentSnapshot);
+    if (repeatIdentity && repeatIdentity.key === context.lastExecutedActionKey) {
+      const freshSnapshot = await fetchSnapshot(context);
+      const freshFingerprint = snapshotFingerprint(freshSnapshot);
+      const pageChanged = context.lastExecutedBeforeFingerprint !== null && context.lastExecutedBeforeFingerprint !== freshFingerprint;
+      currentSnapshot = freshSnapshot;
+      context.lastFingerprint = freshFingerprint;
+      if (!pageChanged || action.action !== "click" || !isPaginationLabel(repeatIdentity.label)) {
+        return await pauseWithGuidance(context, "repeated_action", {
+          error: pageChanged
+            ? "I already did that, but this control is not a pagination control."
+            : "I already did that and nothing changed.",
+          tried: [describeAction(action)],
+          pageTitle: currentSnapshot.title,
+          pageSummary: currentSnapshot.summary.slice(0, 180),
+        });
       }
     }
 
@@ -339,6 +386,7 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
     }
 
     emitStatus(context, "running", `Step ${stepNumber}: executing ${action.action}`);
+    const actionSnapshot = currentSnapshot;
     let response: ExecutionResponse;
     try {
       response = await context.sendTabMessage<ExecutionResponse>(context.tabId, { type: "BV_EXECUTE_ACTION", action });
@@ -387,6 +435,7 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
     const beforeFingerprint = context.lastFingerprint;
     currentSnapshot = response.freshSnapshot || await fetchSnapshot(context);
     const afterFingerprint = snapshotFingerprint(currentSnapshot);
+    rememberExecutedAction(context, action, actionSnapshot, beforeFingerprint || "");
     context.recentActionKeys = [...context.recentActionKeys, actionKey(action)].slice(-4);
     const countsAsUnchangedAction = action.action === "click" || action.action === "navigate" || action.action === "press_key";
     context.unchangedFingerprintCount = countsAsUnchangedAction && beforeFingerprint === afterFingerprint
@@ -395,6 +444,17 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
     context.lastFingerprint = afterFingerprint;
     const recentActions = context.steps.slice(-4).map((step) => step.action);
     const scrollOnlyCycle = recentActions.length === 4 && recentActions.every((recentAction) => recentAction.action === "scroll");
+    const lastThreeActions = context.steps.slice(-3).map((step) => step.action);
+    const tripleActionKey = lastThreeActions.length === 3 ? actionKey(lastThreeActions[0]) : null;
+    const tripleAction = tripleActionKey && lastThreeActions.every((recentAction) => recentAction.action !== "scroll" && recentAction.action !== "type" && actionKey(recentAction) === tripleActionKey);
+    if (tripleAction) {
+      return await pauseWithGuidance(context, "repeated_action", {
+        error: "I already did that three times in a row.",
+        tried: lastThreeActions.map((recentAction) => describeAction(recentAction)),
+        pageTitle: currentSnapshot.title,
+        pageSummary: currentSnapshot.summary.slice(0, 180),
+      });
+    }
     const cycle = !scrollOnlyCycle && context.recentActionKeys.length === 4 &&
       context.recentActionKeys[0] === context.recentActionKeys[2] &&
       context.recentActionKeys[1] === context.recentActionKeys[3] &&
@@ -462,9 +522,11 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
     }
     try {
       emitStatus(context, "running", "Executing confirmed action");
-      const response = await executeConfirmedAction(context, pending);
+      const confirmedExecution = await executeConfirmedAction(context, pending);
+      const response = confirmedExecution.response;
       if (!response?.ok || response.result?.success === false) throw new Error(response?.error || response?.result?.error || "The confirmed action could not be completed.");
       const snapshot = response.freshSnapshot || await fetchSnapshot(context);
+      rememberExecutedAction(context, pending.action, confirmedExecution.beforeSnapshot, snapshotFingerprint(confirmedExecution.beforeSnapshot));
       const stepNumber = context.steps.length + 1;
       const speech = hasPaymentReceipt(snapshot.summary) ? "Payment receipt is visible." : outcomeSpeech(pending.action, pending.snapshot);
       appendStep(context, { stepNumber, action: pending.action, status: "success", spokenSummary: speech, timestamp: Date.now() });
@@ -510,6 +572,8 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
     context.staleElementRetries = 0;
     context.failedActionCounts.clear();
     context.recentActionKeys = [];
+    context.lastExecutedActionKey = null;
+    context.lastExecutedBeforeFingerprint = null;
     try {
       emitStatus(context, "running", "Continuing task");
       return await runLoop(context, await fetchSnapshot(context));
