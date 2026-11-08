@@ -1363,6 +1363,13 @@ export const App: React.FC = () => {
     });
   };
 
+  const showPreparationGuidance = async (task: SubTask, message: string, reason?: "restricted_page" | "tab_closed" | "load_timeout" | "action_failed") => {
+    const resolvedReason = reason || (/timed out|timeout/i.test(message) ? "load_timeout" : /closed|removed/i.test(message) ? "tab_closed" : /normal webpage|Chrome blocks/i.test(message) ? "restricted_page" : "action_failed");
+    const guidance = buildGuidance(resolvedReason, { translate, taskLabel: task.label, error: message });
+    publishTaskCard(task.id, { status: "failed", currentStep: guidance.title, error: guidance.whatHappened, guidance });
+    await speakStatus(`${guidance.title}. ${guidance.whatToDo[0] || ""}`.trim());
+  };
+
   const decomposeWithRetry = async (request: string): Promise<SubTask[]> => {
     const config = { provider: settings.llmProvider, apiKey: settings.llmApiKey, endpoint: settings.llmEndpoint, model: settings.llmModel } as const;
     decompositionNoticeRef.current = null;
@@ -1534,11 +1541,12 @@ export const App: React.FC = () => {
     setSteps([]);
     setStatus("thinking");
     setStatusText(decompositionNoticeRef.current || (tasks.length > 1 ? translate("Opening task tabs...", "काम के टैब खोल रहे हैं...") : translate("Analyzing page...", "पेज का विश्लेषण हो रहा है...")));
+    if (decompositionNoticeRef.current) await speakStatus(decompositionNoticeRef.current);
 
     const tabAssignments: Array<{ task: SubTask; tabId: number }> = [];
-    try {
-      if (tasks.length === 1) {
-        const task = tasks[0];
+    if (tasks.length === 1) {
+      const task = tasks[0];
+      try {
         const tabInfo = await chrome.tabs.get(activeTabId);
         const tabId = activeTabId;
         if (task.startUrl && (isRestrictedPage(tabInfo.url) || /\b(?:open|go|navigate|visit|kholo|खोलो)\b/i.test(initialRequest))) {
@@ -1551,8 +1559,13 @@ export const App: React.FC = () => {
           await waitForTabLoad(tabId);
         }
         tabAssignments.push({ task, tabId });
-      } else {
-        for (const task of tasks) {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Could not prepare the task tab.";
+        await showPreparationGuidance(task, message, /normal webpage|Chrome blocks/i.test(message) ? "restricted_page" : undefined);
+      }
+    } else {
+      for (const task of tasks) {
+        try {
           const tab = await chrome.tabs.create({ url: task.startUrl || "https://www.google.com", active: false });
           if (!tab.id) throw new Error(`Could not create a tab for ${task.label}.`);
           await waitForTabLoad(tab.id);
@@ -1560,20 +1573,24 @@ export const App: React.FC = () => {
           if (!connected?.ok) throw new Error(`Could not connect Browse Voice to the ${task.label} tab.`);
           tabAssignments.push({ task, tabId: tab.id });
           publishTaskCard(task.id, { tabId: tab.id, tabTitle: tab.title || task.label, faviconUrl: tab.favIconUrl });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : `Could not prepare the ${task.label} tab.`;
+          await showPreparationGuidance(task, message);
         }
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not prepare task tabs.";
-      setStatus("idle");
-      setStatusText(message);
-      for (const task of tasks.filter((item) => !tabAssignments.some((assigned) => assigned.task.id === item.id))) publishTaskCard(task.id, { status: "failed", error: message, currentStep: message });
-      return;
     }
 
     if (generation !== taskRunGenerationRef.current) return;
-    for (const assignment of tabAssignments) {
-      const tab = await chrome.tabs.get(assignment.tabId);
-      publishTaskCard(assignment.task.id, { tabId: assignment.tabId, tabTitle: tab.title || assignment.task.label, faviconUrl: tab.favIconUrl });
+    for (const assignment of [...tabAssignments]) {
+      try {
+        const tab = await chrome.tabs.get(assignment.tabId);
+        publishTaskCard(assignment.task.id, { tabId: assignment.tabId, tabTitle: tab.title || assignment.task.label, faviconUrl: tab.favIconUrl });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "The task tab was closed before it could start.";
+        await showPreparationGuidance(assignment.task, message, "tab_closed");
+        const index = tabAssignments.findIndex((item) => item.task.id === assignment.task.id);
+        if (index >= 0) tabAssignments.splice(index, 1);
+      }
     }
     await runTasksWithLimit(tabAssignments);
     await maybeSpeakCombinedSummary();
