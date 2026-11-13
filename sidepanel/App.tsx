@@ -329,6 +329,19 @@ function migrateRetiredGeminiModel(settings: SettingsState): SettingsState {
   return settings;
 }
 
+function migrateGroqSettings(settings: SettingsState): SettingsState {
+  if (settings.llmProvider !== "openai-compatible" || !settings.llmEndpoint.includes("api.groq.com")) {
+    return settings;
+  }
+  return {
+    ...settings,
+    llmProvider: "huggingface",
+    llmApiKey: "",
+    llmEndpoint: HUGGINGFACE_ENDPOINT,
+    llmModel: DEFAULT_HUGGINGFACE_MODEL,
+  };
+}
+
 export const App: React.FC = () => {
   // Agent state
   const [status, setStatus] = useState<AgentStatus>("idle");
@@ -447,14 +460,16 @@ export const App: React.FC = () => {
       if (result.browseVoiceSettings) {
         const savedSettings = result.browseVoiceSettings as Partial<SettingsState>;
         const mergedSettings = { ...DEFAULT_SETTINGS, ...savedSettings };
-        const migratedSettings = migrateRetiredGeminiModel(mergedSettings);
+        const migratedSettings = migrateRetiredGeminiModel(migrateGroqSettings(mergedSettings));
         setSettings(migratedSettings);
         setStatusText(UI_TRANSLATIONS.Ready?.[migratedSettings.languageCode as InterfaceLanguage] || "Ready");
-        if (migratedSettings.llmModel !== savedSettings.llmModel) {
+        if (migratedSettings.llmProvider !== savedSettings.llmProvider ||
+            migratedSettings.llmModel !== savedSettings.llmModel ||
+            migratedSettings.llmApiKey !== savedSettings.llmApiKey) {
           chrome.storage.local.set({ browseVoiceSettings: migratedSettings });
         }
       } else {
-        const initialSettings = migrateRetiredGeminiModel(DEFAULT_SETTINGS);
+        const initialSettings = migrateRetiredGeminiModel(migrateGroqSettings(DEFAULT_SETTINGS));
         setSettings(initialSettings);
         setStatusText(UI_TRANSLATIONS.Ready?.[initialSettings.languageCode as InterfaceLanguage] || "Ready");
         chrome.storage.local.set({ browseVoiceSettings: initialSettings });
