@@ -57,6 +57,16 @@ import {
   type TaskRunnerResult,
   type TaskRunnerStatus,
 } from "./taskRunner";
+import {
+  resolveLanguage,
+  getUiTranslation,
+  UI_TRANSLATIONS,
+  ACTION_SPEECH,
+  FORM_QUESTION_COPY,
+  ACTION_TAG_TRANSLATIONS,
+  type SupportedLanguageCode,
+  type InterfaceLanguage,
+} from "../lib/i18n";
 
 type AgentStatus =
   | "idle"
@@ -257,103 +267,16 @@ interface SiteChatState {
   message: string;
 }
 
-type InterfaceLanguage = "hi-IN" | "en-IN" | "ta-IN" | "te-IN" | "kn-IN" | "mr-IN" | "gu-IN" | "bn-IN" | "pa-IN" | "ml-IN" | "indic-auto";
-
-const UI_TRANSLATIONS: Record<string, Partial<Record<InterfaceLanguage, string>>> = {
-  Ready: { "hi-IN": "तैयार", "ta-IN": "தயார்", "te-IN": "సిద్ధంగా ఉంది", "kn-IN": "ಸಿದ್ಧ", "mr-IN": "तयार", "gu-IN": "તૈયાર", "bn-IN": "প্রস্তুত", "pa-IN": "ਤਿਆਰ", "ml-IN": "തയ്യാർ" },
-  Stop: { "hi-IN": "रोकें", "ta-IN": "நிறுத்து", "te-IN": "ఆపండి", "kn-IN": "ನಿಲ್ಲಿಸಿ", "mr-IN": "थांबवा", "gu-IN": "રોકો", "bn-IN": "থামান", "pa-IN": "ਰੋਕੋ", "ml-IN": "നിർത്തുക" },
-  Settings: { "hi-IN": "सेटिंग्स", "ta-IN": "அமைப்புகள்", "te-IN": "సెట్టింగ్‌లు", "kn-IN": "ಸೆಟ್ಟಿಂಗ್‌ಗಳು", "mr-IN": "सेटिंग्ज", "gu-IN": "સેટિંગ્સ", "bn-IN": "সেটিংস", "pa-IN": "ਸੈਟਿੰਗਾਂ", "ml-IN": "ക്രമീകരണങ്ങൾ" },
-  "Restricted page": { "hi-IN": "प्रतिबंधित पेज", "ta-IN": "தடைசெய்யப்பட்ட பக்கம்", "te-IN": "పరిమితం చేయబడిన పేజీ", "kn-IN": "ನಿರ್ಬಂಧಿತ ಪುಟ", "mr-IN": "प्रतिबंधित पेज", "gu-IN": "પ્રતિબંધિત પેજ", "bn-IN": "সীমাবদ্ধ পৃষ্ঠা", "pa-IN": "ਪ੍ਰਤਿਬੰਧਿਤ ਪੰਨਾ", "ml-IN": "നിയന്ത്രിത പേജ്" },
-  "Confirmation required": { "hi-IN": "पुष्टि आवश्यक है", "ta-IN": "உறுதிப்படுத்தல் தேவை", "te-IN": "నిర్ధారణ అవసరం", "kn-IN": "ದೃಢೀಕರಣ ಅಗತ್ಯವಿದೆ", "mr-IN": "पुष्टी आवश्यक आहे", "gu-IN": "પુષ્ટિ જરૂરી છે", "bn-IN": "নিশ্চিতকরণ প্রয়োজন", "pa-IN": "ਪੁਸ਼ਟੀ ਲੋੜੀਂਦੀ ਹੈ", "ml-IN": "സ്ഥിരീകരണം ആവശ്യമാണ്" },
-  Confirm: { "hi-IN": "पुष्टि करें", "ta-IN": "உறுதிப்படுத்து", "te-IN": "నిర్ధారించండి", "kn-IN": "ದೃಢೀಕರಿಸಿ", "mr-IN": "पुष्टी करा", "gu-IN": "પુષ્ટિ કરો", "bn-IN": "নিশ্চিত করুন", "pa-IN": "ਪੁਸ਼ਟੀ ਕਰੋ", "ml-IN": "സ്ഥിരീകരിക്കുക" },
-  Cancel: { "hi-IN": "रद्द करें", "ta-IN": "ரத்துசெய்", "te-IN": "రద్దు చేయండి", "kn-IN": "ರದ್ದುಮಾಡಿ", "mr-IN": "रद्द करा", "gu-IN": "રદ કરો", "bn-IN": "বাতিল করুন", "pa-IN": "ਰੱਦ ਕਰੋ", "ml-IN": "റദ്ദാക്കുക" },
-  "VOICE CONTROL": { "hi-IN": "वॉइस कंट्रोल", "ta-IN": "குரல் கட்டுப்பாடு", "te-IN": "వాయిస్ నియంత్రణ", "kn-IN": "ಧ್ವನಿ ನಿಯಂತ್ರಣ", "mr-IN": "व्हॉइस कंट्रोल", "gu-IN": "વૉઇસ કંટ્રોલ", "bn-IN": "ভয়েস কন্ট্রোল", "pa-IN": "ਵੌਇਸ ਕੰਟਰੋਲ", "ml-IN": "വോയ്സ് കൺട്രോൾ" },
-  "Select area": { "hi-IN": "क्षेत्र चुनें", "ta-IN": "பகுதியைத் தேர்ந்தெடுக்கவும்", "te-IN": "ప్రాంతాన్ని ఎంచుకోండి", "kn-IN": "ಪ್ರದೇಶ ಆಯ್ಕೆಮಾಡಿ", "mr-IN": "क्षेत्र निवडा", "gu-IN": "વિસ્તાર પસંદ કરો", "bn-IN": "এলাকা নির্বাচন করুন", "pa-IN": "ਖੇਤਰ ਚੁਣੋ", "ml-IN": "ഏരിയ തിരഞ്ഞെടുക്കുക" },
-  "Indexing…": { "hi-IN": "इंडेक्स हो रहा है…", "ta-IN": "அட்டவணைப்படுத்தப்படுகிறது…", "te-IN": "ఇండెక్స్ అవుతోంది…", "kn-IN": "ಇಂಡೆಕ್ಸ್ ಆಗುತ್ತಿದೆ…", "mr-IN": "इंडेक्स होत आहे…", "gu-IN": "ઇન્ડેક્સ થઈ રહ્યું છે…", "bn-IN": "ইনডেক্স হচ্ছে…", "pa-IN": "ਇੰਡੈਕਸ ਹੋ ਰਿਹਾ ਹੈ…", "ml-IN": "ഇൻഡക്സ് ചെയ്യുന്നു…" },
-  "Chat with site": { "hi-IN": "साइट से चैट करें", "ta-IN": "தளத்துடன் அரட்டையடிக்கவும்", "te-IN": "సైట్‌తో చాట్ చేయండి", "kn-IN": "ಸೈಟ್‌ನೊಂದಿಗೆ ಚಾಟ್ ಮಾಡಿ", "mr-IN": "साइटशी चॅट करा", "gu-IN": "સાઇટ સાથે ચેટ કરો", "bn-IN": "সাইটের সঙ্গে চ্যাট করুন", "pa-IN": "ਸਾਈਟ ਨਾਲ ਚੈਟ ਕਰੋ", "ml-IN": "സൈറ്റുമായി ചാറ്റ് ചെയ്യുക" },
-  "Listening…": { "hi-IN": "सुन रहे हैं…", "ta-IN": "கேட்கிறது…", "te-IN": "వింటున్నాం…", "kn-IN": "ಕೇಳುತ್ತಿದೆ…", "mr-IN": "ऐकत आहे…", "gu-IN": "સાંભળી રહ્યા છીએ…", "bn-IN": "শুনছি…", "pa-IN": "ਸੁਣ ਰਹੇ ਹਾਂ…", "ml-IN": "കേൾക്കുന്നു…" },
-  "Tap mic to speak": { "hi-IN": "बोलने के लिए माइक दबाएं", "ta-IN": "பேச மைக்கைத் தட்டவும்", "te-IN": "మాట్లాడటానికి మైక్‌ను నొక్కండి", "kn-IN": "ಮಾತನಾಡಲು ಮೈಕ್ ಟ್ಯಾಪ್ ಮಾಡಿ", "mr-IN": "बोलण्यासाठी माइक टॅप करा", "gu-IN": "બોલવા માટે માઇક દબાવો", "bn-IN": "কথা বলতে মাইক ট্যাপ করুন", "pa-IN": "ਬੋਲਣ ਲਈ ਮਾਈਕ ਟੈਪ ਕਰੋ", "ml-IN": "സംസാരിക്കാൻ മൈക്ക് ടാപ്പ് ചെയ്യുക" },
-  "Speak naturally or try a quick prompt": { "hi-IN": "स्वाभाविक रूप से बोलें या quick prompt चुनें", "ta-IN": "இயல்பாகப் பேசவும் அல்லது quick prompt முயற்சிக்கவும்", "te-IN": "సహజంగా మాట్లాడండి లేదా quick prompt ప్రయత్నించండి", "kn-IN": "ಸ್ವಾಭಾವಿಕವಾಗಿ ಮಾತನಾಡಿ ಅಥವಾ quick prompt ಪ್ರಯತ್ನಿಸಿ", "mr-IN": "नैसर्गिकपणे बोला किंवा quick prompt वापरा", "gu-IN": "સહજ રીતે બોલો અથવા quick prompt અજમાવો", "bn-IN": "স্বাভাবিকভাবে বলুন বা quick prompt চেষ্টা করুন", "pa-IN": "ਕੁਦਰਤੀ ਤੌਰ 'ਤੇ ਬੋਲੋ ਜਾਂ quick prompt ਅਜ਼ਮਾਓ", "ml-IN": "സ്വാഭാവികമായി സംസാരിക്കുക അല്ലെങ്കിൽ quick prompt പരീക്ഷിക്കുക" },
-  "Check electricity bill": { "hi-IN": "बिजली का बिल देखें", "ta-IN": "மின்சாரக் கட்டணத்தைச் சரிபார்க்கவும்", "te-IN": "విద్యుత్ బిల్లును తనిఖీ చేయండి", "kn-IN": "ವಿದ್ಯುತ್ ಬಿಲ್ ಪರಿಶೀಲಿಸಿ", "mr-IN": "वीज बिल तपासा", "gu-IN": "વીજળીનું બિલ તપાસો", "bn-IN": "বিদ্যুৎ বিল পরীক্ষা করুন", "pa-IN": "ਬਿਜਲੀ ਦਾ ਬਿੱਲ ਚੈੱਕ ਕਰੋ", "ml-IN": "വൈദ്യുതി ബിൽ പരിശോധിക്കുക" },
-  "Pay utility bill": { "hi-IN": "बिजली का बिल भरें", "ta-IN": "மின்சாரக் கட்டணத்தைச் செலுத்தவும்", "te-IN": "విద్యుత్ బిల్లు చెల్లించండి", "kn-IN": "ವಿದ್ಯುತ್ ಬಿಲ್ ಪಾವತಿಸಿ", "mr-IN": "वीज बिल भरा", "gu-IN": "વીજળીનું બિલ ભરો", "bn-IN": "বিদ্যুৎ বিল পরিশোধ করুন", "pa-IN": "ਬਿਜਲੀ ਦਾ ਬਿੱਲ ਭਰੋ", "ml-IN": "വൈദ്യുതി ബിൽ അടയ്ക്കുക" },
-  "Download payment receipt": { "hi-IN": "भुगतान रसीद डाउनलोड करें", "ta-IN": "கட்டண ரசீதைப் பதிவிறக்கவும்", "te-IN": "చెల్లింపు రసీదును డౌన్‌లోడ్ చేయండి", "kn-IN": "ಪಾವತಿ ರಸೀದಿಯನ್ನು ಡೌನ್‌ಲೋಡ್ ಮಾಡಿ", "mr-IN": "पेमेंट पावती डाउनलोड करा", "gu-IN": "ચુકવણીની રસીદ ડાઉનલોડ કરો", "bn-IN": "পেমেন্ট রসিদ ডাউনলোড করুন", "pa-IN": "ਭੁਗਤਾਨ ਦੀ ਰਸੀਦ ਡਾਊਨਲੋਡ ਕਰੋ", "ml-IN": "പേയ്മെന്റ് രസീത് ഡൗൺലോഡ് ചെയ്യുക" },
-  "Live Transcript": { "hi-IN": "लाइव ट्रांसक्रिप्ट", "ta-IN": "நேரடி உரை", "te-IN": "లైవ్ ట్రాన్స్‌క్రిప్ట్", "kn-IN": "ಲೈವ್ ಪ್ರತಿಲಿಪಿ", "mr-IN": "लाइव्ह ट्रान्सक्रिप्ट", "gu-IN": "લાઇવ ટ્રાન્સક્રિપ્ટ", "bn-IN": "লাইভ ট্রান্সক্রিপ্ট", "pa-IN": "ਲਾਈਵ ਟ੍ਰਾਂਸਕ੍ਰਿਪਟ", "ml-IN": "ലൈവ് ട്രാൻസ്ക്രിപ്റ്റ്" },
-  "Selected context": { "hi-IN": "चयनित संदर्भ", "ta-IN": "தேர்ந்தெடுக்கப்பட்ட சூழல்", "te-IN": "ఎంచుకున్న సందర్భం", "kn-IN": "ಆಯ್ಕೆಮಾಡಿದ ಸಂದರ್ಭ", "mr-IN": "निवडलेला संदर्भ", "gu-IN": "પસંદ કરેલો સંદર્ભ", "bn-IN": "নির্বাচিত প্রসঙ্গ", "pa-IN": "ਚੁਣਿਆ ਸੰਦਰਭ", "ml-IN": "തിരഞ്ഞെടുത്ത സന്ദർഭം" },
-  Area: { "hi-IN": "क्षेत्र", "ta-IN": "பகுதி", "te-IN": "ప్రాంతం", "kn-IN": "ಪ್ರದೇಶ", "mr-IN": "क्षेत्र", "gu-IN": "વિસ્તાર", "bn-IN": "এলাকা", "pa-IN": "ਖੇਤਰ", "ml-IN": "ഏരിയ" },
-  Clear: { "hi-IN": "साफ़ करें", "ta-IN": "அழிக்கவும்", "te-IN": "క్లియర్ చేయండి", "kn-IN": "ತೆರವುಗೊಳಿಸಿ", "mr-IN": "साफ करा", "gu-IN": "સાફ કરો", "bn-IN": "পরিষ্কার করুন", "pa-IN": "ਸਾਫ਼ ਕਰੋ", "ml-IN": "മായ്ക്കുക" },
-  "Indexed and ready for questions": { "hi-IN": "इंडेक्स तैयार है, आप सवाल पूछ सकते हैं", "ta-IN": "அட்டவணை தயாராக உள்ளது, கேள்விகளைக் கேட்கலாம்", "te-IN": "ఇండెక్స్ సిద్ధంగా ఉంది, ప్రశ్నలు అడగవచ్చు", "kn-IN": "ಇಂಡೆಕ್ಸ್ ಸಿದ್ಧವಾಗಿದೆ, ಪ್ರಶ್ನೆಗಳನ್ನು ಕೇಳಬಹುದು", "mr-IN": "इंडेक्स तयार आहे, तुम्ही प्रश्न विचारू शकता", "gu-IN": "ઇન્ડેક્સ તૈયાર છે, તમે પ્રશ્નો પૂછી શકો છો", "bn-IN": "ইনডেক্স প্রস্তুত, প্রশ্ন করতে পারেন", "pa-IN": "ਇੰਡੈਕਸ ਤਿਆਰ ਹੈ, ਤੁਸੀਂ ਸਵਾਲ ਪੁੱਛ ਸਕਦੇ ਹੋ", "ml-IN": "ഇൻഡക്സ് തയ്യാറാണ്, ചോദ്യങ്ങൾ ചോദിക്കാം" },
-  "Indexing failed": { "hi-IN": "इंडेक्सिंग विफल रही", "ta-IN": "அட்டவணைப்படுத்தல் தோல்வியடைந்தது", "te-IN": "ఇండెక్సింగ్ విఫలమైంది", "kn-IN": "ಇಂಡೆಕ್ಸಿಂಗ್ ವಿಫಲವಾಗಿದೆ", "mr-IN": "इंडेक्सिंग अयशस्वी झाले", "gu-IN": "ઇન્ડેક્સિંગ નિષ્ફળ થયું", "bn-IN": "ইনডেক্সিং ব্যর্থ হয়েছে", "pa-IN": "ਇੰਡੈਕਸਿੰਗ ਅਸਫਲ ਰਹੀ", "ml-IN": "ഇൻഡക്സിംഗ് പരാജയപ്പെട്ടു" },
-  "Crawler is working": { "hi-IN": "क्रॉलर काम कर रहा है", "ta-IN": "கிராலர் வேலை செய்கிறது", "te-IN": "క్రాలర్ పని చేస్తోంది", "kn-IN": "ಕ್ರಾಲರ್ ಕೆಲಸ ಮಾಡುತ್ತಿದೆ", "mr-IN": "क्रॉलर काम करत आहे", "gu-IN": "ક્રૉલર કામ કરી રહ્યું છે", "bn-IN": "ক্রলার কাজ করছে", "pa-IN": "ਕ੍ਰਾਲਰ ਕੰਮ ਕਰ ਰਿਹਾ ਹੈ", "ml-IN": "ക്രാളർ പ്രവർത്തിക്കുന്നു" },
-  pages: { "hi-IN": "पेज", "ta-IN": "பக்கங்கள்", "te-IN": "పేజీలు", "kn-IN": "ಪುಟಗಳು", "mr-IN": "पेज", "gu-IN": "પેજ", "bn-IN": "পৃষ্ঠা", "pa-IN": "ਪੰਨੇ", "ml-IN": "പേജുകൾ" },
-  You: { "hi-IN": "आप", "ta-IN": "நீங்கள்", "te-IN": "మీరు", "kn-IN": "ನೀವು", "mr-IN": "तुम्ही", "gu-IN": "તમે", "bn-IN": "আপনি", "pa-IN": "ਤੁਸੀਂ", "ml-IN": "നിങ്ങൾ" },
-  "Site knowledge": { "hi-IN": "साइट नॉलेज", "ta-IN": "தள அறிவு", "te-IN": "సైట్ నాలెడ్జ్", "kn-IN": "ಸೈಟ್ ಜ್ಞಾನ", "mr-IN": "साइट नॉलेज", "gu-IN": "સાઇટ નોલેજ", "bn-IN": "সাইট জ্ঞান", "pa-IN": "ਸਾਈਟ ਨੌਲੇਜ", "ml-IN": "സൈറ്റ് നോളജ്" },
-  "Or type a command here...": { "hi-IN": "या यहां कमांड लिखें...", "ta-IN": "அல்லது கட்டளையை இங்கே தட்டச்சு செய்யவும்...", "te-IN": "లేదా ఇక్కడ కమాండ్ టైప్ చేయండి...", "kn-IN": "ಅಥವಾ ಇಲ್ಲಿ ಕಮಾಂಡ್ ಟೈಪ್ ಮಾಡಿ...", "mr-IN": "किंवा येथे कमांड टाइप करा...", "gu-IN": "અથવા અહીં કમાન્ડ લખો...", "bn-IN": "অথবা এখানে কমান্ড লিখুন...", "pa-IN": "ਜਾਂ ਇੱਥੇ ਕਮਾਂਡ ਟਾਈਪ ਕਰੋ...", "ml-IN": "അല്ലെങ്കിൽ ഇവിടെ കമാൻഡ് ടൈപ്പ് ചെയ്യുക..." },
-  Send: { "hi-IN": "भेजें", "ta-IN": "அனுப்பு", "te-IN": "పంపండి", "kn-IN": "ಕಳುಹಿಸಿ", "mr-IN": "पाठवा", "gu-IN": "મોકલો", "bn-IN": "পাঠান", "pa-IN": "ਭੇਜੋ", "ml-IN": "അയയ്ക്കുക" },
-  ACTIVITY: { "hi-IN": "गतिविधि", "ta-IN": "செயல்பாடு", "te-IN": "కార్యకలాపం", "kn-IN": "ಚಟುವಟಿಕೆ", "mr-IN": "गतिविधी", "gu-IN": "પ્રવૃત્તિ", "bn-IN": "কার্যকলাপ", "pa-IN": "ਗਤੀਵਿਧੀ", "ml-IN": "പ്രവർത്തനം" },
-  "Execution steps": { "hi-IN": "एक्जीक्यूशन स्टेप्स", "ta-IN": "செயல்பாட்டு படிகள்", "te-IN": "అమలు దశలు", "kn-IN": "ಕಾರ್ಯಗತ ಹಂತಗಳು", "mr-IN": "अंमलबजावणीच्या पायऱ्या", "gu-IN": "અમલના પગલાં", "bn-IN": "সম্পাদনের ধাপ", "pa-IN": "ਕਾਰਵਾਈ ਦੇ ਕਦਮ", "ml-IN": "നിർവഹണ ഘട്ടങ്ങൾ" },
-  "Your actions will appear here": { "hi-IN": "आपकी कार्रवाइयां यहां दिखाई देंगी", "ta-IN": "உங்கள் செயல்கள் இங்கே தோன்றும்", "te-IN": "మీ చర్యలు ఇక్కడ కనిపిస్తాయి", "kn-IN": "ನಿಮ್ಮ ಕ್ರಿಯೆಗಳು ಇಲ್ಲಿ ಕಾಣಿಸುತ್ತವೆ", "mr-IN": "तुमच्या कृती येथे दिसतील", "gu-IN": "તમારી ક્રિયાઓ અહીં દેખાશે", "bn-IN": "আপনার কাজ এখানে দেখা যাবে", "pa-IN": "ਤੁਹਾਡੀਆਂ ਕਾਰਵਾਈਆਂ ਇੱਥੇ ਦਿਖਾਈ ਦੇਣਗੀਆਂ", "ml-IN": "നിങ്ങളുടെ പ്രവർത്തനങ്ങൾ ഇവിടെ കാണിക്കും" },
-  "Automated web clicks, fills, and navigation will stream live": { "hi-IN": "वेब क्लिक, फिल और नेविगेशन यहां दिखाई देंगे", "ta-IN": "தானியங்கி கிளிக்குகள், நிரப்பல்கள் மற்றும் வழிசெலுத்தல் இங்கே தெரியும்", "te-IN": "ఆటోమేటెడ్ వెబ్ క్లిక్‌లు, ఫిల్‌లు మరియు నావిగేషన్ ఇక్కడ కనిపిస్తాయి", "kn-IN": "ಸ್ವಯಂಚಾಲಿತ ವೆಬ್ ಕ್ಲಿಕ್‌ಗಳು, ಭರ್ತಿಗಳು ಮತ್ತು ನ್ಯಾವಿಗೇಶನ್ ಇಲ್ಲಿ ಕಾಣಿಸುತ್ತವೆ", "mr-IN": "स्वयंचलित वेब क्लिक्स, फिल्स आणि नेव्हिगेशन येथे दिसेल", "gu-IN": "સ્વચાલિત વેબ ક્લિક્સ, ફિલ્સ અને નેવિગેશન અહીં દેખાશે", "bn-IN": "স্বয়ংক্রিয় ওয়েব ক্লিক, ফিল এবং নেভিগেশন এখানে দেখা যাবে", "pa-IN": "ਆਟੋਮੈਟਿਕ ਵੈੱਬ ਕਲਿੱਕ, ਫਿਲ ਅਤੇ ਨੈਵੀਗੇਸ਼ਨ ਇੱਥੇ ਦਿਖਾਈ ਦੇਵੇਗੀ", "ml-IN": "ഓട്ടോമേറ്റഡ് വെബ് ക്ലിക്കുകൾ, ഫില്ലുകൾ, നാവിഗേഷൻ എന്നിവ ഇവിടെ കാണിക്കും" },
-  "Secure Web Sandbox Active": { "hi-IN": "सिक्योर वेब सैंडबॉक्स सक्रिय है", "ta-IN": "பாதுகாப்பான வலை சாண்ட்பாக்ஸ் செயலில் உள்ளது", "te-IN": "సురక్షిత వెబ్ శాండ్‌బాక్స్ యాక్టివ్‌గా ఉంది", "kn-IN": "ಸುರಕ್ಷಿತ ವೆಬ್ ಸ್ಯಾಂಡ್‌ಬಾಕ್ಸ್ ಸಕ್ರಿಯವಾಗಿದೆ", "mr-IN": "सिक्योर वेब सँडबॉक्स सक्रिय आहे", "gu-IN": "સિક્યોર વેબ સેન્ડબોક્સ સક્રિય છે", "bn-IN": "সুরক্ষিত ওয়েব স্যান্ডবক্স সক্রিয়", "pa-IN": "ਸੁਰੱਖਿਅਤ ਵੈੱਬ ਸੈਂਡਬਾਕਸ ਸਰਗਰਮ ਹੈ", "ml-IN": "സുരക്ഷിത വെബ് സാൻഡ്ബോക്സ് സജീവമാണ്" },
-  Feedback: { "hi-IN": "फीडबैक", "ta-IN": "கருத்து", "te-IN": "ఫీడ్‌బ్యాక్", "kn-IN": "ಪ್ರತಿಕ್ರಿಯೆ", "mr-IN": "अभिप्राय", "gu-IN": "પ્રતિસાદ", "bn-IN": "মতামত", "pa-IN": "ਫੀਡਬੈਕ", "ml-IN": "ഫീഡ്ബാക്ക്" },
-  Language: { "hi-IN": "भाषा", "ta-IN": "மொழி", "te-IN": "భాష", "kn-IN": "ಭಾಷೆ", "mr-IN": "भाषा", "gu-IN": "ભાષા", "bn-IN": "ভাষা", "pa-IN": "ਭਾਸ਼ਾ", "ml-IN": "ഭാഷ" },
-  "Save Settings": { "hi-IN": "सेटिंग्स सेव करें", "ta-IN": "அமைப்புகளைச் சேமிக்கவும்", "te-IN": "సెట్టింగ్‌లను సేవ్ చేయండి", "kn-IN": "ಸೆಟ್ಟಿಂಗ್‌ಗಳನ್ನು ಉಳಿಸಿ", "mr-IN": "सेटिंग्ज सेव्ह करा", "gu-IN": "સેટિંગ્સ સાચવો", "bn-IN": "সেটিংস সংরক্ষণ করুন", "pa-IN": "ਸੈਟਿੰਗਾਂ ਸੇਵ ਕਰੋ", "ml-IN": "ക്രമീകരണങ്ങൾ സംരക്ഷിക്കുക" },
-};
-
-Object.assign(UI_TRANSLATIONS, {
-  "Planner Provider": { "hi-IN": "प्लानर प्रोवाइडर", "ta-IN": "திட்டமிடுபவர் வழங்குநர்", "te-IN": "ప్లానర్ ప్రొవైడర్", "kn-IN": "ಪ್ಲಾನರ್ ಪೂರೈಕೆದಾರ", "mr-IN": "प्लॅनर प्रोव्हायडर", "gu-IN": "પ્લાનર પ્રોવાઇડર", "bn-IN": "প্ল্যানার প্রদানকারী", "pa-IN": "ਪਲੈਨਰ ਪ੍ਰਦਾਤਾ", "ml-IN": "പ്ലാനർ പ്രൊവൈഡർ" },
-  "Site knowledge API endpoint": { "hi-IN": "साइट नॉलेज API endpoint", "ta-IN": "தள அறிவு API endpoint", "te-IN": "సైట్ నాలెడ్జ్ API endpoint", "kn-IN": "ಸೈಟ್ ಜ್ಞಾನ API endpoint", "mr-IN": "साइट नॉलेज API endpoint", "gu-IN": "સાઇટ નોલેજ API endpoint", "bn-IN": "সাইট জ্ঞান API endpoint", "pa-IN": "ਸਾਈਟ ਨੌਲੇਜ API endpoint", "ml-IN": "സൈറ്റ് നോളജ് API endpoint" },
-  "Site knowledge API key (optional)": { "hi-IN": "साइट नॉलेज API key (वैकल्पिक)", "ta-IN": "தள அறிவு API key (விருப்பம்)", "te-IN": "సైట్ నాలెడ్జ్ API key (ఐచ్ఛికం)", "kn-IN": "ಸೈಟ್ ಜ್ಞಾನ API key (ಐಚ್ಛಿಕ)", "mr-IN": "साइट नॉलेज API key (पर्यायी)", "gu-IN": "સાઇટ નોલેજ API key (વૈકલ્પિક)", "bn-IN": "সাইট জ্ঞান API key (ঐচ্ছিক)", "pa-IN": "ਸਾਈਟ ਨੌਲੇਜ API key (ਵਿਕਲਪਿਕ)", "ml-IN": "സൈറ്റ് നോളജ് API key (ഓപ്ഷണൽ)" },
-  "Maximum pages per site": { "hi-IN": "प्रति साइट अधिकतम पेज", "ta-IN": "ஒரு தளத்திற்கான அதிகபட்ச பக்கங்கள்", "te-IN": "సైట్‌కు గరిష్ట పేజీలు", "kn-IN": "ಪ್ರತಿ ಸೈಟ್‌ಗೆ ಗರಿಷ್ಠ ಪುಟಗಳು", "mr-IN": "प्रति साइट कमाल पेज", "gu-IN": "સાઇટ દીઠ મહત્તમ પેજ", "bn-IN": "প্রতি সাইটে সর্বাধিক পৃষ্ঠা", "pa-IN": "ਪ੍ਰਤੀ ਸਾਈਟ ਵੱਧ ਤੋਂ ਵੱਧ ਪੰਨੇ", "ml-IN": "ഒരു സൈറ്റിന് പരമാവധി പേജുകൾ" },
-  "Answer ready": { "hi-IN": "जवाब तैयार है", "ta-IN": "பதில் தயாராக உள்ளது", "te-IN": "సమాధానం సిద్ధంగా ఉంది", "kn-IN": "ಉತ್ತರ ಸಿದ್ಧವಾಗಿದೆ", "mr-IN": "उत्तर तयार आहे", "gu-IN": "જવાબ તૈયાર છે", "bn-IN": "উত্তর প্রস্তুত", "pa-IN": "ਜਵਾਬ ਤਿਆਰ ਹੈ", "ml-IN": "ഉത്തരം തയ്യാറാണ്" },
-  Completed: { "hi-IN": "पूरा हुआ", "ta-IN": "முடிந்தது", "te-IN": "పూర్తయింది", "kn-IN": "ಪೂರ್ಣಗೊಂಡಿದೆ", "mr-IN": "पूर्ण झाले", "gu-IN": "પૂર્ણ થયું", "bn-IN": "সম্পন্ন হয়েছে", "pa-IN": "ਪੂਰਾ ਹੋਇਆ", "ml-IN": "പൂർത്തിയായി" },
-  Stopped: { "hi-IN": "रोक दिया गया", "ta-IN": "நிறுத்தப்பட்டது", "te-IN": "ఆపివేయబడింది", "kn-IN": "ನಿಲ್ಲಿಸಲಾಗಿದೆ", "mr-IN": "थांबवले", "gu-IN": "રોકવામાં આવ્યું", "bn-IN": "থামানো হয়েছে", "pa-IN": "ਰੋਕ ਦਿੱਤਾ ਗਿਆ", "ml-IN": "നിർത്തി" },
-  "Site ready": { "hi-IN": "साइट तैयार है", "ta-IN": "தளம் தயாராக உள்ளது", "te-IN": "సైట్ సిద్ధంగా ఉంది", "kn-IN": "ಸೈಟ್ ಸಿದ್ಧವಾಗಿದೆ", "mr-IN": "साइट तयार आहे", "gu-IN": "સાઇટ તૈયાર છે", "bn-IN": "সাইট প্রস্তুত", "pa-IN": "ਸਾਈਟ ਤਿਆਰ ਹੈ", "ml-IN": "സൈറ്റ് തയ്യാറാണ്" },
-  "Searching site knowledge...": { "hi-IN": "साइट नॉलेज खोज रहे हैं...", "ta-IN": "தள அறிவைத் தேடுகிறது...", "te-IN": "సైట్ నాలెడ్జ్‌ను వెతుకుతోంది...", "kn-IN": "ಸೈಟ್ ಜ್ಞಾನವನ್ನು ಹುಡುಕುತ್ತಿದೆ...", "mr-IN": "साइट नॉलेज शोधत आहे...", "gu-IN": "સાઇટ નોલેજ શોધી રહ્યા છીએ...", "bn-IN": "সাইট জ্ঞান খোঁজা হচ্ছে...", "pa-IN": "ਸਾਈਟ ਨੌਲੇਜ ਖੋਜ ਰਹੇ ਹਾਂ...", "ml-IN": "സൈറ്റ് നോളജ് തിരയുന്നു..." },
-  "Could not answer": { "hi-IN": "जवाब नहीं मिल सका", "ta-IN": "பதில் கிடைக்கவில்லை", "te-IN": "సమాధానం ఇవ్వలేకపోయాం", "kn-IN": "ಉತ್ತರಿಸಲಾಗಲಿಲ್ಲ", "mr-IN": "उत्तर देता आले नाही", "gu-IN": "જવાબ આપી શકાયો નથી", "bn-IN": "উত্তর দেওয়া যায়নি", "pa-IN": "ਜਵਾਬ ਨਹੀਂ ਮਿਲ ਸਕਿਆ", "ml-IN": "ഉത്തരം നൽകാനായില്ല" },
-  "Analyzing page...": { "hi-IN": "पेज का विश्लेषण हो रहा है...", "ta-IN": "பக்கம் பகுப்பாய்வு செய்யப்படுகிறது...", "te-IN": "పేజీని విశ్లేషిస్తోంది...", "kn-IN": "ಪುಟವನ್ನು ವಿಶ್ಲೇಷಿಸಲಾಗುತ್ತಿದೆ...", "mr-IN": "पेजचे विश्लेषण होत आहे...", "gu-IN": "પેજનું વિશ્લેષણ થઈ રહ્યું છે...", "bn-IN": "পৃষ্ঠা বিশ্লেষণ করা হচ্ছে...", "pa-IN": "ਪੰਨੇ ਦਾ ਵਿਸ਼ਲੇਸ਼ਣ ਹੋ ਰਿਹਾ ਹੈ...", "ml-IN": "പേജ് വിശകലനം ചെയ്യുന്നു..." },
-  "Waiting for confirmation": { "hi-IN": "पुष्टि की प्रतीक्षा है", "ta-IN": "உறுதிப்படுத்தலுக்காக காத்திருக்கிறது", "te-IN": "నిర్ధారణ కోసం వేచి ఉంది", "kn-IN": "ದೃಢೀಕರಣಕ್ಕಾಗಿ ಕಾಯುತ್ತಿದೆ", "mr-IN": "पुष्टीची प्रतीक्षा आहे", "gu-IN": "પુષ્ટિની રાહ જોઈ રહ્યા છીએ", "bn-IN": "নিশ্চিতকরণের অপেক্ষায়", "pa-IN": "ਪੁਸ਼ਟੀ ਦੀ ਉਡੀਕ ਹੈ", "ml-IN": "സ്ഥിരീകരണത്തിനായി കാത്തിരിക്കുന്നു" },
-  "Awaiting response": { "hi-IN": "जवाब की प्रतीक्षा है", "ta-IN": "பதிலுக்காக காத்திருக்கிறது", "te-IN": "సమాధానం కోసం వేచి ఉంది", "kn-IN": "ಪ್ರತಿಕ್ರಿಯೆಗಾಗಿ ಕಾಯುತ್ತಿದೆ", "mr-IN": "उत्तराची प्रतीक्षा आहे", "gu-IN": "જવાબની રાહ જોઈ રહ્યા છીએ", "bn-IN": "উত্তরের অপেক্ষায়", "pa-IN": "ਜਵਾਬ ਦੀ ਉਡੀਕ ਹੈ", "ml-IN": "പ്രതികരണത്തിനായി കാത്തിരിക്കുന്നു" },
-  "Microphone access error": { "hi-IN": "माइक की अनुमति में त्रुटि", "ta-IN": "மைக்ரோஃபோன் அணுகல் பிழை", "te-IN": "మైక్రోఫోన్ యాక్సెస్ లోపం", "kn-IN": "ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶ ದೋಷ", "mr-IN": "मायक्रोफोन प्रवेश त्रुटी", "gu-IN": "માઇક્રોફોન ઍક્સેસ ભૂલ", "bn-IN": "মাইক্রোফোন অ্যাক্সেস ত্রুটি", "pa-IN": "ਮਾਈਕ੍ਰੋਫੋਨ ਪਹੁੰਚ ਗਲਤੀ", "ml-IN": "മൈക്രോഫോൺ ആക്സസ് പിശക്" },
-  "Check site": { "hi-IN": "साइट जांचें", "ta-IN": "தளத்தைச் சரிபார்க்கவும்", "te-IN": "సైట్‌ను తనిఖీ చేయండి", "kn-IN": "ಸೈಟ್ ಪರಿಶೀಲಿಸಿ", "mr-IN": "साइट तपासा", "gu-IN": "સાઇટ તપાસો", "bn-IN": "সাইট পরীক্ষা করুন", "pa-IN": "ਸਾਈਟ ਜਾਂਚੋ", "ml-IN": "സൈറ്റ് പരിശോധിക്കുക" },
-  "Checking…": { "hi-IN": "जांच हो रही है…", "ta-IN": "சரிபார்க்கிறது…", "te-IN": "తనిఖీ చేస్తోంది…", "kn-IN": "ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ…", "mr-IN": "तपासत आहे…", "gu-IN": "તપાસી રહ્યું છે…", "bn-IN": "পরীক্ষা করা হচ্ছে…", "pa-IN": "ਜਾਂਚ ਹੋ ਰਹੀ ਹੈ…", "ml-IN": "പരിശോധിക്കുന്നു…" },
-  "Safety check complete": { "hi-IN": "सुरक्षा जांच पूरी हुई", "ta-IN": "பாதுகாப்புச் சரிபார்ப்பு முடிந்தது", "te-IN": "భద్రతా తనిఖీ పూర్తయింది", "kn-IN": "ಸುರಕ್ಷತಾ ಪರಿಶೀಲನೆ ಪೂರ್ಣಗೊಂಡಿದೆ", "mr-IN": "सुरक्षा तपासणी पूर्ण झाली", "gu-IN": "સુરક્ષા તપાસ પૂર્ણ થઈ", "bn-IN": "নিরাপত্তা পরীক্ষা সম্পন্ন হয়েছে", "pa-IN": "ਸੁਰੱਖਿਆ ਜਾਂਚ ਪੂਰੀ ਹੋਈ", "ml-IN": "സുരക്ഷാ പരിശോധന പൂർത്തിയായി" },
-  "Checking site safety...": { "hi-IN": "साइट सुरक्षा जांच रहे हैं...", "ta-IN": "தளப் பாதுகாப்பைச் சரிபார்க்கிறது...", "te-IN": "సైట్ భద్రతను తనిఖీ చేస్తోంది...", "kn-IN": "ಸೈಟ್ ಸುರಕ್ಷತೆಯನ್ನು ಪರಿಶೀಲಿಸಲಾಗುತ್ತಿದೆ...", "mr-IN": "साइट सुरक्षेची तपासणी करत आहे...", "gu-IN": "સાઇટ સુરક્ષા તપાસી રહ્યા છીએ...", "bn-IN": "সাইটের নিরাপত্তা পরীক্ষা করা হচ্ছে...", "pa-IN": "ਸਾਈਟ ਦੀ ਸੁਰੱਖਿਆ ਜਾਂਚ ਰਹੇ ਹਾਂ...", "ml-IN": "സൈറ്റ് സുരക്ഷ പരിശോധിക്കുന്നു..." },
-  "SITE SAFETY": { "hi-IN": "साइट सुरक्षा", "ta-IN": "தளப் பாதுகாப்பு", "te-IN": "సైట్ భద్రత", "kn-IN": "ಸೈಟ್ ಸುರಕ್ಷತೆ", "mr-IN": "साइट सुरक्षा", "gu-IN": "સાઇટ સુરક્ષા", "bn-IN": "সাইট নিরাপত্তা", "pa-IN": "ਸਾਈਟ ਸੁਰੱਖਿਆ", "ml-IN": "സൈറ്റ് സുരക്ഷ" },
-  "Low risk": { "hi-IN": "कम जोखिम", "ta-IN": "குறைந்த ஆபத்து", "te-IN": "తక్కువ ప్రమాదం", "kn-IN": "ಕಡಿಮೆ ಅಪಾಯ", "mr-IN": "कमी जोखीम", "gu-IN": "ઓછું જોખમ", "bn-IN": "কম ঝুঁকি", "pa-IN": "ਘੱਟ ਜੋਖਮ", "ml-IN": "കുറഞ്ഞ അപകടസാധ്യത" },
-  "Use caution": { "hi-IN": "सावधानी बरतें", "ta-IN": "எச்சரிக்கையாக இருங்கள்", "te-IN": "జాగ్రత్తగా ఉండండి", "kn-IN": "ಎಚ್ಚರಿಕೆಯಿಂದಿರಿ", "mr-IN": "सावधगिरी बाळगा", "gu-IN": "સાવચેત રહો", "bn-IN": "সতর্ক থাকুন", "pa-IN": "ਸਾਵਧਾਨੀ ਵਰਤੋ", "ml-IN": "ജാഗ്രത പാലിക്കുക" },
-  "High risk": { "hi-IN": "उच्च जोखिम", "ta-IN": "அதிக ஆபத்து", "te-IN": "అధిక ప్రమాదం", "kn-IN": "ಹೆಚ್ಚಿನ ಅಪಾಯ", "mr-IN": "उच्च जोखीम", "gu-IN": "ઉચ્ચ જોખમ", "bn-IN": "উচ্চ ঝুঁকি", "pa-IN": "ਉੱਚ ਜੋਖਮ", "ml-IN": "ഉയർന്ന അപകടസാധ്യത" },
-  Unknown: { "hi-IN": "अज्ञात", "ta-IN": "தெரியவில்லை", "te-IN": "తెలియదు", "kn-IN": "ತಿಳಿದಿಲ್ಲ", "mr-IN": "अज्ञात", "gu-IN": "અજ્ઞાત", "bn-IN": "অজানা", "pa-IN": "ਅਣਜਾਣ", "ml-IN": "അജ്ഞാതം" },
-  "This is a risk assessment, not proof that a site is fake or legitimate.": { "hi-IN": "यह जोखिम आकलन है; इससे साइट के नकली या वैध होने का पक्का प्रमाण नहीं मिलता।", "ta-IN": "இது ஒரு ஆபத்து மதிப்பீடு மட்டுமே; தளம் போலியானது அல்லது உண்மையானது என்பதற்கான உறுதியான ஆதாரம் அல்ல.", "te-IN": "ఇది ప్రమాద అంచనా మాత్రమే; సైట్ నకిలీ లేదా నిజమైనదని నిరూపించదు.", "kn-IN": "ಇದು ಅಪಾಯದ ಮೌಲ್ಯಮಾಪನ ಮಾತ್ರ; ಸೈಟ್ ನಕಲಿ ಅಥವಾ ನಿಜವೆಂಬುದಕ್ಕೆ ಇದು ಪುರಾವೆಯಲ್ಲ.", "mr-IN": "हे जोखीम मूल्यांकन आहे; साइट बनावट किंवा वैध असल्याचा हा पुरावा नाही.", "gu-IN": "આ જોખમનું મૂલ્યાંકન છે; સાઇટ નકલી કે વિશ્વસનીય હોવાનો આ પુરાવો નથી.", "bn-IN": "এটি একটি ঝুঁকি মূল্যায়ন; সাইটটি ভুয়া বা বৈধ—এর প্রমাণ নয়।", "pa-IN": "ਇਹ ਜੋਖਮ ਦਾ ਮੁਲਾਂਕਣ ਹੈ; ਇਹ ਸਾਈਟ ਦੇ ਨਕਲੀ ਜਾਂ ਜਾਇਜ਼ ਹੋਣ ਦਾ ਸਬੂਤ ਨਹੀਂ ਹੈ।", "ml-IN": "ഇത് ഒരു അപകടസാധ്യതാ വിലയിരുത്തൽ മാത്രമാണ്; സൈറ്റ് വ്യാജമോ യഥാർത്ഥമോ എന്നതിന് തെളിവല്ല." },
-});
-
-Object.assign(UI_TRANSLATIONS, {
-  Step: { "hi-IN": "चरण", "ta-IN": "படி", "te-IN": "దశ", "kn-IN": "ಹಂತ", "mr-IN": "टप्पा", "gu-IN": "પગલું", "bn-IN": "ধাপ", "pa-IN": "ਕਦਮ", "ml-IN": "ഘട്ടം" },
-  Field: { "hi-IN": "फ़ील्ड", "ta-IN": "புலம்", "te-IN": "ఫీల్డ్", "kn-IN": "ಕ್ಷೇತ್ರ", "mr-IN": "फील्ड", "gu-IN": "ફીલ્ડ", "bn-IN": "ঘর", "pa-IN": "ਫੀਲਡ", "ml-IN": "ഫീൽഡ്" },
-  "Reply with a value for": { "hi-IN": "इसके लिए जानकारी दें", "ta-IN": "இதற்கான மதிப்பைச் சொல்லுங்கள்", "te-IN": "దీనికి విలువ చెప్పండి", "kn-IN": "ಇದಕ್ಕೆ ಮೌಲ್ಯವನ್ನು ತಿಳಿಸಿ", "mr-IN": "यासाठी माहिती द्या", "gu-IN": "આ માટે માહિતી આપો", "bn-IN": "এর জন্য তথ্য দিন", "pa-IN": "ਇਸ ਲਈ ਜਾਣਕਾਰੀ ਦਿਓ", "ml-IN": "ഇതിന് വേണ്ട വിവരം നൽകുക" },
-  "Page changed; refreshing before retrying...": { "hi-IN": "पेज बदल गया है; दोबारा कोशिश से पहले नया पेज देख रहे हैं...", "ta-IN": "பக்கம் மாறியுள்ளது; மீண்டும் முயற்சிக்கும் முன் புதுப்பிக்கிறோம்...", "te-IN": "పేజీ మారింది; మళ్లీ ప్రయత్నించే ముందు తాజా పేజీని చూస్తున్నాం...", "kn-IN": "ಪುಟ ಬದಲಾಗಿದೆ; ಮತ್ತೆ ಪ್ರಯತ್ನಿಸುವ ಮೊದಲು ನವೀಕರಿಸುತ್ತಿದ್ದೇವೆ...", "mr-IN": "पृष्ठ बदलले; पुन्हा प्रयत्न करण्यापूर्वी अद्ययावत करत आहोत...", "gu-IN": "પેજ બદલાયું છે; ફરી પ્રયાસ કરતાં પહેલાં નવું પેજ જોઈ રહ્યા છીએ...", "bn-IN": "পৃষ্ঠা বদলেছে; আবার চেষ্টা করার আগে নতুন পৃষ্ঠা দেখছি...", "pa-IN": "ਪੰਨਾ ਬਦਲ ਗਿਆ; ਦੁਬਾਰਾ ਕੋਸ਼ਿਸ਼ ਤੋਂ ਪਹਿਲਾਂ ਤਾਜ਼ਾ ਕਰ ਰਹੇ ਹਾਂ...", "ml-IN": "പേജ് മാറി; വീണ്ടും ശ്രമിക്കുന്നതിന് മുമ്പ് പുതുക്കുന്നു..." },
-});
+const resolveSpeechLanguage = resolveLanguage;
 
 function isSelectionCommand(text: string): boolean {
   const value = text.toLowerCase().trim();
   return /(?:select|snip|capture|screenshot|crop|highlight).*(?:area|this|that|section|part|region)?|(?:yeh|yah|is|this)\s+(?:select|snip|capture|screenshot)|area\s+(?:select|snip)|select\s+karo/.test(value);
 }
 
-
-const ACTION_SPEECH: Record<string, { filled: string; selected: string; clicked: string; scrolled: string; opened: string }> = {
-  "en-IN": { filled: "Filled the %s field.", selected: "Updated the %s selection.", clicked: "Clicked %s.", scrolled: "Scrolled %s.", opened: "Opened the requested page." },
-  "hi-IN": { filled: "%s फ़ील्ड भर दिया।", selected: "%s का विकल्प चुन लिया।", clicked: "%s पर क्लिक किया।", scrolled: "%s स्क्रॉल किया।", opened: "मांगा गया पेज खोल दिया।" },
-  "ta-IN": { filled: "%s புலத்தை நிரப்பினேன்.", selected: "%s தேர்வை மாற்றினேன்.", clicked: "%s என்பதை அழுத்தினேன்.", scrolled: "%s உருட்டினேன்.", opened: "கோரிய பக்கத்தைத் திறந்தேன்." },
-  "te-IN": { filled: "%s ఫీల్డ్‌ను నింపాను.", selected: "%s ఎంపికను మార్చాను.", clicked: "%s పై క్లిక్ చేశాను.", scrolled: "%s స్క్రోల్ చేశాను.", opened: "కోరిన పేజీని తెరిచాను." },
-  "kn-IN": { filled: "%s ಕ್ಷೇತ್ರವನ್ನು ಭರ್ತಿ ಮಾಡಿದೆ.", selected: "%s ಆಯ್ಕೆಯನ್ನು ಬದಲಿಸಿದೆ.", clicked: "%s ಕ್ಲಿಕ್ ಮಾಡಿದೆ.", scrolled: "%s ಸ್ಕ್ರಾಲ್ ಮಾಡಿದೆ.", opened: "ಕೋರಿದ ಪುಟವನ್ನು ತೆರೆದಿದ್ದೇನೆ." },
-  "mr-IN": { filled: "%s फील्ड भरले.", selected: "%s पर्याय निवडला.", clicked: "%s वर क्लिक केले.", scrolled: "%s स्क्रोल केले.", opened: "मागितलेले पृष्ठ उघडले." },
-  "gu-IN": { filled: "%s ફીલ્ડ ભરી દીધું.", selected: "%s વિકલ્પ બદલ્યો.", clicked: "%s પર ક્લિક કર્યું.", scrolled: "%s સ્ક્રોલ કર્યું.", opened: "માગેલું પેજ ખોલ્યું." },
-  "bn-IN": { filled: "%s ঘরটি পূরণ করেছি।", selected: "%s বিকল্পটি বদলেছি।", clicked: "%s-এ ক্লিক করেছি।", scrolled: "%s স্ক্রল করেছি।", opened: "অনুরোধ করা পৃষ্ঠাটি খুলেছি।" },
-  "pa-IN": { filled: "%s ਫੀਲਡ ਭਰ ਦਿੱਤਾ।", selected: "%s ਵਿਕਲਪ ਬਦਲਿਆ।", clicked: "%s 'ਤੇ ਕਲਿੱਕ ਕੀਤਾ।", scrolled: "%s ਸਕ੍ਰੋਲ ਕੀਤਾ।", opened: "ਮੰਗਿਆ ਪੰਨਾ ਖੋਲ੍ਹ ਦਿੱਤਾ।" },
-  "ml-IN": { filled: "%s ഫീൽഡ് പൂരിപ്പിച്ചു.", selected: "%s തിരഞ്ഞെടുപ്പ് മാറ്റി.", clicked: "%s ക്ലിക്ക് ചെയ്തു.", scrolled: "%s സ്ക്രോൾ ചെയ്തു.", opened: "ആവശ്യപ്പെട്ട പേജ് തുറന്നു." },
-};
-
 function localizedActionSpeech(action: PlannerAction, snapshot: PageSnapshot, languageCode: string): string {
-  const speech = ACTION_SPEECH[languageCode] || ACTION_SPEECH["en-IN"];
+  const lang = resolveLanguage(languageCode);
+  const speech = ACTION_SPEECH[lang] || ACTION_SPEECH["en-IN"];
   if (action.action === "navigate") return speech.opened;
   if (action.action === "scroll") return speech.scrolled.replace("%s", action.direction);
   if (action.action === "click" || action.action === "type" || action.action === "select") {
@@ -366,34 +289,9 @@ function localizedActionSpeech(action: PlannerAction, snapshot: PageSnapshot, la
   return action.action === "done" ? action.summary : action.action === "ask_user" ? action.question : "";
 }
 
-function resolveSpeechLanguage(languageCode: string, text: string): string {
-  if (languageCode !== "indic-auto") return languageCode;
-  if (/\p{Script=Tamil}/u.test(text)) return "ta-IN";
-  if (/\p{Script=Telugu}/u.test(text)) return "te-IN";
-  if (/\p{Script=Kannada}/u.test(text)) return "kn-IN";
-  if (/\p{Script=Bengali}/u.test(text)) return "bn-IN";
-  if (/\p{Script=Gurmukhi}/u.test(text)) return "pa-IN";
-  if (/\p{Script=Malayalam}/u.test(text)) return "ml-IN";
-  if (/\p{Script=Gujarati}/u.test(text)) return "gu-IN";
-  if (/\p{Script=Devanagari}/u.test(text)) return "hi-IN";
-  return "en-IN";
-}
-
-const FORM_QUESTION_COPY: Record<string, { checkbox: string; select: string; generic: string }> = {
-  "en-IN": { checkbox: "Should I check “%s”? Please answer yes or no.", select: "Which option should I choose for “%s”? Options: %s. Say the option or its number.", generic: "What should I enter for “%s”?" },
-  "hi-IN": { checkbox: "क्या मैं “%s” चुनूँ? कृपया हाँ या नहीं में जवाब दें।", select: "“%s” के लिए इनमें से कौन-सा विकल्प चुनूँ? %s। विकल्प का नाम या उसका क्रमांक बताइए।", generic: "“%s” के लिए कौन-सी जानकारी भरूँ? हिंदी में जवाब दें; मैं इसे अंग्रेज़ी में लिखूँगा।" },
-  "ta-IN": { checkbox: "“%s” என்பதைத் தேர்ந்தெடுக்கவா? ஆம் அல்லது இல்லை என்று சொல்லுங்கள்.", select: "“%s” என்பதற்கு எந்த விருப்பத்தைத் தேர்ந்தெடுக்க வேண்டும்? விருப்பங்கள்: %s. பெயர் அல்லது எண்ணைச் சொல்லுங்கள்.", generic: "“%s” என்பதற்கு என்ன தகவலை உள்ளிட வேண்டும்?" },
-  "te-IN": { checkbox: "“%s”ను ఎంచుకోవాలా? అవును లేదా కాదు అని చెప్పండి.", select: "“%s” కోసం ఏ ఎంపికను ఎంచుకోవాలి? ఎంపికలు: %s. పేరు లేదా సంఖ్య చెప్పండి.", generic: "“%s” కోసం ఏ సమాచారం నమోదు చేయాలి?" },
-  "kn-IN": { checkbox: "“%s” ಆಯ್ಕೆ ಮಾಡಬೇಕೇ? ಹೌದು ಅಥವಾ ಇಲ್ಲ ಎಂದು ಹೇಳಿ.", select: "“%s” ಗೆ ಯಾವ ಆಯ್ಕೆ ಮಾಡಬೇಕು? ಆಯ್ಕೆಗಳು: %s. ಹೆಸರು ಅಥವಾ ಸಂಖ್ಯೆ ಹೇಳಿ.", generic: "“%s” ಗೆ ಯಾವ ಮಾಹಿತಿಯನ್ನು ನಮೂದಿಸಬೇಕು?" },
-  "mr-IN": { checkbox: "“%s” निवडू का? कृपया हो किंवा नाही असे सांगा.", select: "“%s” साठी कोणता पर्याय निवडू? पर्याय: %s. नाव किंवा क्रमांक सांगा.", generic: "“%s” साठी कोणती माहिती भरू?" },
-  "gu-IN": { checkbox: "શું “%s” પસંદ કરું? કૃપા કરીને હા અથવા ના કહો.", select: "“%s” માટે કયો વિકલ્પ પસંદ કરું? વિકલ્પો: %s. નામ અથવા નંબર કહો.", generic: "“%s” માટે કઈ માહિતી ભરું?" },
-  "bn-IN": { checkbox: "“%s” নির্বাচন করব? হ্যাঁ বা না বলুন।", select: "“%s”-এর জন্য কোন বিকল্পটি নেব? বিকল্প: %s। নাম বা নম্বর বলুন।", generic: "“%s”-এর জন্য কী তথ্য দেব?" },
-  "pa-IN": { checkbox: "ਕੀ ਮੈਂ “%s” ਚੁਣਾਂ? ਹਾਂ ਜਾਂ ਨਹੀਂ ਦੱਸੋ।", select: "“%s” ਲਈ ਕਿਹੜਾ ਵਿਕਲਪ ਚੁਣਾਂ? ਵਿਕਲਪ: %s। ਨਾਮ ਜਾਂ ਨੰਬਰ ਦੱਸੋ।", generic: "“%s” ਲਈ ਕਿਹੜੀ ਜਾਣਕਾਰੀ ਭਰਾਂ?" },
-  "ml-IN": { checkbox: "“%s” തിരഞ്ഞെടുക്കട്ടേ? അതെ അല്ലെങ്കിൽ ഇല്ല എന്ന് പറയുക.", select: "“%s” എന്നതിന് ഏത് ഓപ്ഷൻ തിരഞ്ഞെടുക്കണം? ഓപ്ഷനുകൾ: %s. പേരോ നമ്പറോ പറയുക.", generic: "“%s” എന്നതിന് എന്ത് വിവരമാണ് നൽകേണ്ടത്?" },
-};
-
 function localizedFormQuestion(field: FormFieldDescriptor, languageCode: string): string {
-  const copy = FORM_QUESTION_COPY[languageCode] || FORM_QUESTION_COPY["en-IN"];
+  const lang = resolveLanguage(languageCode);
+  const copy = FORM_QUESTION_COPY[lang] || FORM_QUESTION_COPY["en-IN"];
   const label = field.label.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   if (field.kind === "checkbox") return copy.checkbox.replace("%s", label);
   if (field.kind === "select" || field.kind === "radio") {
@@ -401,18 +299,6 @@ function localizedFormQuestion(field: FormFieldDescriptor, languageCode: string)
   }
   return copy.generic.replace("%s", label);
 }
-
-const ACTION_TAG_TRANSLATIONS: Record<string, Record<string, string>> = {
-  "hi-IN": { click: "क्लिक", type: "लिखें", select: "चुनें", scroll: "स्क्रॉल", navigate: "पेज खोलें", ask_user: "पूछें", done: "पूरा" },
-  "ta-IN": { click: "அழுத்து", type: "உள்ளிடு", select: "தேர்வு", scroll: "உருட்டு", navigate: "பக்கம் திற", ask_user: "கேள்", done: "முடிந்தது" },
-  "te-IN": { click: "క్లిక్", type: "నమోదు", select: "ఎంపిక", scroll: "స్క్రోల్", navigate: "పేజీ తెరువు", ask_user: "అడుగు", done: "పూర్తి" },
-  "kn-IN": { click: "ಕ್ಲಿಕ್", type: "ನಮೂದಿಸಿ", select: "ಆಯ್ಕೆ", scroll: "ಸ್ಕ್ರಾಲ್", navigate: "ಪುಟ ತೆರೆಯಿರಿ", ask_user: "ಕೇಳಿ", done: "ಪೂರ್ಣ" },
-  "mr-IN": { click: "क्लिक", type: "भरा", select: "निवडा", scroll: "स्क्रोल", navigate: "पृष्ठ उघडा", ask_user: "विचारा", done: "पूर्ण" },
-  "gu-IN": { click: "ક્લિક", type: "ભરો", select: "પસંદ કરો", scroll: "સ્ક્રોલ", navigate: "પેજ ખોલો", ask_user: "પૂછો", done: "પૂર્ણ" },
-  "bn-IN": { click: "ক্লিক", type: "লিখুন", select: "বেছে নিন", scroll: "স্ক্রল", navigate: "পৃষ্ঠা খুলুন", ask_user: "জিজ্ঞাসা", done: "সম্পন্ন" },
-  "pa-IN": { click: "ਕਲਿੱਕ", type: "ਭਰੋ", select: "ਚੁਣੋ", scroll: "ਸਕ੍ਰੋਲ", navigate: "ਪੰਨਾ ਖੋਲ੍ਹੋ", ask_user: "ਪੁੱਛੋ", done: "ਪੂਰਾ" },
-  "ml-IN": { click: "ക്ലിക്ക്", type: "നൽകുക", select: "തിരഞ്ഞെടുക്കുക", scroll: "സ്ക്രോൾ", navigate: "പേജ് തുറക്കുക", ask_user: "ചോദിക്കുക", done: "പൂർത്തിയായി" },
-};
 
 function cropCapturedImage(dataUrl: string, rect: { x: number; y: number; width: number; height: number }, viewportWidth: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -476,9 +362,9 @@ export const App: React.FC = () => {
   // Settings modal
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
-  const translate = (english: string, hindi: string) => {
-    const language = resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript) as InterfaceLanguage;
-    return UI_TRANSLATIONS[english]?.[language] || (language === "hi-IN" ? hindi : english);
+  const translate = (english: string, hindiFallback?: string) => {
+    const language = resolveLanguage(settings.languageCode, taskGoalRef.current || transcript);
+    return getUiTranslation(english, language, hindiFallback);
   };
 
   // Refs for tracking active objects
@@ -758,7 +644,7 @@ export const App: React.FC = () => {
     if (!session || !field) return false;
     let value = toEnglishDigits(answer.trim());
     if (!value) {
-      setStatusText(`Please answer for: ${field.label}`);
+      setStatusText(`${translate("Please answer for:", "कृपया इसके लिए उत्तर दें:")} ${field.label}`);
       return true;
     }
 
@@ -769,23 +655,23 @@ export const App: React.FC = () => {
       const checkboxChoice = field.kind === "checkbox" ? parseYesNo(value) : null;
       if (field.kind === "checkbox" && checkboxChoice === null) {
         setStatus("idle");
-        setStatusText(`Please answer yes or no for: ${field.label}.`);
+        setStatusText(`${translate("Please answer yes or no for:", "कृपया इसके लिए हाँ या नहीं में उत्तर दें:")} ${field.label}.`);
         return true;
       }
 
       const element = findFormField(freshSnapshot, field, field.kind === "radio" ? value : undefined);
       if (!element && field.kind === "radio") {
         setStatus("idle");
-        setStatusText(`Choose one of these options for ${field.label}: ${field.options?.join(", ") || ""}`);
+        setStatusText(`${translate("Choose one of these options for", "इसके लिए इनमें से एक विकल्प चुनें")} ${field.label}: ${field.options?.join(", ") || ""}`);
         return true;
       }
-      if (!element) throw new Error(`I can no longer find the ${field.label} field. Check the page and try again.`);
+      if (!element) throw new Error(translate("I can no longer find that field. Check the page and try again.", "मुझे वह फ़ील्ड नहीं मिल रहा है। पेज जाँचें और पुनः प्रयास करें।"));
 
       if (field.kind === "text" && /\p{Script=Devanagari}/u.test(value)) {
         const normalizedField = `${field.label} ${field.name || ""} ${field.type || ""}`.toLowerCase();
         if (/email|e-mail|url|website|website address/.test(normalizedField)) {
           setStatus("idle");
-          setStatusText("यह जानकारी अंग्रेज़ी अक्षरों में टाइप करें, ताकि ईमेल या लिंक सही रहे।");
+          setStatusText(translate("Please type this in English characters so the email or link is correct.", "यह जानकारी अंग्रेज़ी अक्षरों में टाइप करें, ताकि ईमेल या लिंक सही रहे।"));
           return true;
         }
         const conversionMode = field.type === "date" || /\b(date|dob|birth)\b/.test(normalizedField)
@@ -806,7 +692,7 @@ export const App: React.FC = () => {
         } catch (conversionError) {
           console.warn("Hindi form answer conversion failed:", conversionError);
           setStatus("idle");
-          setStatusText("मैं इसे अंग्रेज़ी में नहीं बदल पाया। कृपया जवाब अंग्रेज़ी अक्षरों में टाइप करें और फिर भेजें।");
+          setStatusText(translate("I could not convert that to English. Please type your answer in English characters and send.", "मैं इसे अंग्रेज़ी में नहीं बदल पाया। कृपया जवाब अंग्रेज़ी अक्षरों में टाइप करें और फिर भेजें।"));
           return true;
         }
       }
@@ -815,7 +701,7 @@ export const App: React.FC = () => {
         const match = matchOption(field.options || [], value);
         if (field.options?.length && !match) {
           setStatus("idle");
-          setStatusText(`Choose one of these options for ${field.label}: ${field.options.join(", ")}`);
+          setStatusText(`${translate("Choose one of these options for", "इसके लिए इनमें से एक विकल्प चुनें")} ${field.label}: ${field.options.join(", ")}`);
           return true;
         }
         selectedValue = match || value;
@@ -835,11 +721,15 @@ export const App: React.FC = () => {
       if (candidate) {
         const validation = validatePlannerAction(candidate);
         if (!validation.valid) throw new Error(validation.error);
-        const safety = inspectActionSafety(validation.action, freshSnapshot);
+        const safety = inspectActionSafety(validation.action, freshSnapshot, resolveSpeechLanguage(settings.languageCode, taskGoalRef.current || transcript));
         if (!safety.permitted) throw new Error(safety.reason || "Safety blocked this field.");
         if (safety.requiresConfirmation) {
           session.skippedManualCount += 1;
-          await speakStatus(`I left ${field.label} unchanged because it needs a separate confirmation. I will continue to the next field.`);
+          const leftMsg = translate(
+            "I left %s unchanged because it needs a separate confirmation. I will continue to the next field.",
+            "मैंने %s को नहीं बदला क्योंकि इसके लिए अलग से पुष्टि चाहिए। मैं अगले फ़ील्ड पर आगे बढ़ रहा हूँ।"
+          ).replace("%s", field.label);
+          await speakStatus(leftMsg);
         } else {
           response = await sendTabMessage<{ ok: boolean; error?: string; freshSnapshot?: PageSnapshot }>(session.tabId, {
             type: "BV_EXECUTE_ACTION",
@@ -869,8 +759,14 @@ export const App: React.FC = () => {
 
       if (session.fields.length === 0) {
         const skippedMessage = session.skippedManualCount > 0
-          ? "The supported fields are filled. Fill any sensitive, file, or protected fields yourself, then review the form. I did not submit it."
-          : "The visible fields are filled. Please review the form. I did not submit it.";
+          ? translate(
+              "The supported fields are filled. Fill any sensitive, file, or protected fields yourself, then review the form. I did not submit it.",
+              "समर्थित फ़ील्ड भर दिए गए हैं। संवेदनशील, फ़ाइल या सुरक्षित फ़ील्ड स्वयं भरें, फिर फ़ॉर्म की समीक्षा करें। मैंने इसे सबमिट नहीं किया है।"
+            )
+          : translate(
+              "The visible fields are filled. Please review the form. I did not submit it.",
+              "दिखाई देने वाले फ़ील्ड भर दिए गए हैं। कृपया फ़ॉर्म की समीक्षा करें। मैंने इसे सबमिट नहीं किया है।"
+            );
         formFillRef.current = null;
         taskGoalRef.current = null;
         conversationRef.current = [];
@@ -1341,6 +1237,7 @@ export const App: React.FC = () => {
       tabId,
       goal: task.goal,
       planner,
+      languageCode: resolveSpeechLanguage(settings.languageCode, task.goal),
       sendTabMessage,
       callbacks: {
         onStatus: (taskStatus, text) => {
@@ -1370,20 +1267,20 @@ export const App: React.FC = () => {
         if (manualFields.length > 0) await sendTabMessage(tabId, { type: "BV_HIGHLIGHT_MANUAL_FIELDS", fields: manualFields });
         if (fields.length > 0) {
           formFillRef.current = { tabId, goal: task.goal, fields, index: 0, completed: new Set(), skippedManualCount: manualFields.length };
-          publishTaskCard(task.id, { status: "waiting_confirmation", currentStep: "Waiting for form details" });
-          if (manualFields.length > 0) await speakStatus("I will leave sensitive and file fields for you to handle manually.");
+          publishTaskCard(task.id, { status: "waiting_confirmation", currentStep: translate("Waiting for form details", "फ़ॉर्म विवरण की प्रतीक्षा") });
+          if (manualFields.length > 0) await speakStatus(translate("I will leave sensitive and file fields for you to handle manually.", "संवेदनशील और फ़ाइल फ़ील्ड को आपके लिए छोड़ दिया गया है ताकि आप उन्हें स्वयं भर सकें।"));
           await askNextFormField();
           return { status: "waiting_confirmation", context };
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Could not inspect the form.";
+        const message = error instanceof Error ? error.message : translate("Could not inspect the form.", "फ़ॉर्म का निरीक्षण नहीं किया जा सका।");
         publishTaskCard(task.id, { status: "failed", error: message, currentStep: message });
         return { status: "failed", error: message, context };
       }
     }
     const result = await runAgentTask(context);
     if (result.status === "waiting_confirmation") {
-      publishTaskCard(task.id, { status: "waiting_confirmation", confirmationMessage: context.pendingConfirmation?.message || context.pendingQuestion || "Waiting for your response" });
+      publishTaskCard(task.id, { status: "waiting_confirmation", confirmationMessage: context.pendingConfirmation?.message || context.pendingQuestion || translate("Waiting for your response", "आपके जवाब की प्रतीक्षा है") });
     } else {
       publishTaskCard(task.id, { status: result.status, summary: result.summary, error: result.error });
     }
@@ -2257,8 +2154,8 @@ export const App: React.FC = () => {
           <button
             className={`mic-button ${voiceSessionActive ? "recording" : ""}`}
             onClick={toggleRecording}
-            title={voiceSessionActive ? "Tap to end voice conversation" : "Tap to start a voice conversation"}
-            aria-label={status === "listening" ? "Stop listening" : "Start voice input"}
+            title={voiceSessionActive ? translate("Tap to end voice conversation", "वॉइस बातचीत समाप्त करने के लिए टैप करें") : translate("Tap to start a voice conversation", "वॉइस बातचीत शुरू करने के लिए टैप करें")}
+            aria-label={status === "listening" ? translate("Stop listening", "सुनना बंद करें") : translate("Start voice input", "वॉइस इनपुट शुरू करें")}
           >
             {status === "listening" ? <span className="recording-mark" /> : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8"/></svg>}
           </button>
@@ -2266,8 +2163,8 @@ export const App: React.FC = () => {
           <div className="mic-help">
             {voiceSessionActive
               ? status === "listening"
-                ? "Listening... I will listen again after each reply. Say 'stop' or tap to end."
-                : "Voice conversation active. I will listen again when I finish this turn. Tap to end."
+                ? translate("Listening... I will listen again after each reply. Say 'stop' or tap to end.", "सुन रहे हैं... हर जवाब के बाद मैं फिर सुनूँगा। रोकने के लिए 'stop' कहें या टैप करें।")
+                : translate("Voice conversation active. I will listen again when I finish this turn. Tap to end.", "वॉइस बातचीत सक्रिय है। यह काम पूरा होने पर मैं फिर सुनूँगा। समाप्त करने के लिए टैप करें।")
               : translate("Speak naturally or try a quick prompt", "स्वाभाविक रूप से बोलें या कोई quick prompt चुनें")}
           </div>
           {!voiceSessionActive && (

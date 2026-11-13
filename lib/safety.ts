@@ -15,6 +15,7 @@
  */
 
 import { isAllowedNavigationUrl, type PlannerAction } from "./schema.ts";
+import { resolveLanguage, SAFETY_SPEECH } from "./i18n.ts";
 
 export interface InteractiveElement {
   id: number;
@@ -141,7 +142,8 @@ export function maskSensitiveValue(value: string | undefined, isSensitive: boole
  */
 export function inspectActionSafety(
   action: PlannerAction,
-  snapshot: PageSnapshot
+  snapshot: PageSnapshot,
+  languageCode: string = "en-IN"
 ): {
   permitted: boolean;
   requiresConfirmation: boolean;
@@ -149,13 +151,16 @@ export function inspectActionSafety(
   targetElement?: InteractiveElement;
   safetyAlertSpeech?: string;
 } {
+  const lang = resolveLanguage(languageCode);
+  const copy = SAFETY_SPEECH[lang] || SAFETY_SPEECH["en-IN"];
+
   // Check action targeting an element
   if (action.action === "navigate" && !isAllowedNavigationUrl(action.url)) {
     return {
       permitted: false,
       requiresConfirmation: false,
       reason: "Safety Block: Navigation is limited to http(s) URLs.",
-      safetyAlertSpeech: "I can only open secure or normal web addresses starting with HTTP or HTTPS.",
+      safetyAlertSpeech: copy.invalidNavigation,
     };
   }
 
@@ -177,8 +182,7 @@ export function inspectActionSafety(
         requiresConfirmation: false,
         targetElement: target,
         reason: `Safety Block: Cannot type into sensitive field (${target.sensitiveReason || "Password/OTP/Card/Aadhaar"}).`,
-        safetyAlertSpeech:
-          "This is a password, OTP, or card field. For your security, please fill it manually.",
+        safetyAlertSpeech: copy.sensitiveField,
       };
     }
 
@@ -196,7 +200,7 @@ export function inspectActionSafety(
           requiresConfirmation: true,
           targetElement: target,
           reason: `Confirmation Required: Action '${target.label}' involves payment or form submission.`,
-          safetyAlertSpeech: `Do you want to confirm '${target.label}'? Say yes or press Confirm.`,
+          safetyAlertSpeech: copy.confirmationRequired.replace("%s", target.label),
         };
       }
     }

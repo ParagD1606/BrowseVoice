@@ -7,6 +7,11 @@ import {
 import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "../lib/payment-state.ts";
 import { inspectActionSafety, type PageSnapshot } from "../lib/safety.ts";
 import { validatePlannerAction, type PlannerAction } from "../lib/schema.ts";
+import {
+  resolveLanguage,
+  getUiTranslation,
+  ACTION_SPEECH,
+} from "../lib/i18n.ts";
 
 export type TaskRunnerStatus =
   | "queued"
@@ -37,6 +42,7 @@ export interface TaskRunnerContext {
   readonly planner: PlannerProvider;
   readonly maxSteps: number;
   readonly controller: AbortController;
+  readonly languageCode?: string;
   steps: StepLogEntry[];
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
   pendingConfirmation: PendingTaskConfirmation | null;
@@ -65,6 +71,7 @@ export function createTaskRunnerContext(
 ): TaskRunnerContext {
   return {
     ...input,
+    languageCode: input.languageCode || "en-IN",
     maxSteps: input.maxSteps ?? 15,
     controller: new AbortController(),
     steps: [],
@@ -80,7 +87,8 @@ export function stopAgentTask(context: TaskRunnerContext): void {
   context.controller.abort();
   context.pendingConfirmation = null;
   context.pendingQuestion = null;
-  context.callbacks?.onStatus?.("stopped", "Task stopped");
+  const lang = resolveLanguage(context.languageCode || "en-IN", context.goal);
+  context.callbacks?.onStatus?.("stopped", getUiTranslation("Task stopped", lang, "काम रोक दिया गया"));
 }
 
 export function stopAgentTasks(contexts: Iterable<TaskRunnerContext>): void {
@@ -100,17 +108,23 @@ function appendStep(context: TaskRunnerContext, entry: StepLogEntry): void {
   context.callbacks?.onStep?.(entry);
 }
 
-function outcomeSpeech(action: PlannerAction, snapshot: PageSnapshot): string {
+function outcomeSpeech(action: PlannerAction, snapshot: PageSnapshot, languageCode: string = "en-IN"): string {
+  const lang = resolveLanguage(languageCode);
+  const speech = ACTION_SPEECH[lang] || ACTION_SPEECH["en-IN"];
+  if (action.action === "navigate") return speech.opened;
+  if (action.action === "scroll") return speech.scrolled.replace("%s", action.direction);
   if (action.action === "click" || action.action === "type" || action.action === "select") {
     const target = snapshot.interactiveElements.find((element) => element.id === action.id);
     const label = target?.label?.trim() || "field";
-    if (action.action === "click") return `Clicked ${label}.`;
-    if (action.action === "select") return `Updated the ${label} selection.`;
-    return `Filled the ${label} field.`;
+    if (action.action === "click") return speech.clicked.replace("%s", label);
+    if (action.action === "select") return speech.selected.replace("%s", label);
+    return speech.filled.replace("%s", label);
   }
-  if (action.action === "scroll") return `Scrolled ${action.direction}.`;
-  if (action.action === "navigate") return "Opened the requested page.";
-  return action.action === "done" ? action.summary : action.action === "ask_user" ? action.question : "Action completed.";
+  return action.action === "done"
+    ? action.summary
+    : action.action === "ask_user"
+    ? action.question
+    : getUiTranslation("Action completed.", lang);
 }
 
 function repeatableActionKey(action: PlannerAction): string | null {
@@ -137,6 +151,7 @@ async function planWithRetry(context: TaskRunnerContext, snapshot: PageSnapshot)
     try {
       return await context.planner.plan({
         userRequest: context.goal,
+        languageCode: context.languageCode,
         snapshot,
         history: context.steps.slice(-5),
         conversation: context.conversation,
@@ -159,12 +174,14 @@ async function fetchSnapshot(context: TaskRunnerContext): Promise<PageSnapshot> 
 
 async function executeConfirmedAction(context: TaskRunnerContext, pending: PendingTaskConfirmation): Promise<ExecutionResponse> {
   const freshSnapshot = await fetchSnapshot(context);
-  const safety = inspectActionSafety(pending.action, freshSnapshot);
-  if (!safety.permitted) throw new Error(safety.reason || "The confirmed action is no longer safe.");
+  const lang = resolveLanguage(context.languageCode || "en-IN", context.goal);
+  const safety = inspectActionSafety(pending.action, freshSnapshot, lang);
+  if (!safety.permitted) throw new Error(safety.reason || getUiTranslation("The confirmed action could not be completed.", lang));
   return context.sendTabMessage<ExecutionResponse>(context.tabId, { type: "BV_EXECUTE_ACTION", action: pending.action });
 }
 
 async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapshot): Promise<TaskRunnerResult> {
+  const lang = resolveLanguage(context.languageCode || "en-IN", context.goal);
   let currentSnapshot = initialSnapshot || await fetchSnapshot(context);
   let lastSuccessfulRepeatableAction: string | null = null;
   let lastSkippedRepeatedAction: string | null = null;
@@ -172,7 +189,9 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
 
   for (let stepNumber = context.steps.length + 1; stepNumber <= context.maxSteps; stepNumber += 1) {
     if (isAborted(context)) return { status: "stopped", context };
-    emitStatus(context, "running", `Step ${stepNumber}: planning next action`);
+    const stepLabel = getUiTranslation("Step", lang, "चरण");
+    const planningLabel = getUiTranslation("Planning next action...", lang, "अगली कार्रवाई की योजना बन रही है...");
+    emitStatus(context, "running", `${stepLabel} ${stepNumber}: ${planningLabel}`);
 
     let action = await planWithRetry(context, currentSnapshot);
     const validation = validatePlannerAction(action);
@@ -194,20 +213,21 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
     const key = repeatableActionKey(action);
     if (key && key === lastSuccessfulRepeatableAction) {
       if (key === lastSkippedRepeatedAction) {
-        const message = "I already completed that action, so I stopped before repeating it again.";
+        const message = getUiTranslation("I already completed that action, so I stopped before repeating it again.", lang);
         emitStatus(context, "failed", message);
         return { status: "failed", error: message, context };
       }
       lastSkippedRepeatedAction = key;
-      context.conversation = [...context.conversation, { role: "assistant" as const, content: "I already completed that exact action. I will not repeat it." }].slice(-6);
+      const skipMessage = getUiTranslation("I already completed that exact action. I will not repeat it.", lang);
+      context.conversation = [...context.conversation, { role: "assistant" as const, content: skipMessage }].slice(-6);
       currentSnapshot = await fetchSnapshot(context);
       stepNumber -= 1;
       continue;
     }
 
-    const safety = inspectActionSafety(action, currentSnapshot);
+    const safety = inspectActionSafety(action, currentSnapshot, lang);
     if (!safety.permitted) {
-      const message = safety.safetyAlertSpeech || "This field contains sensitive information. Please fill it manually.";
+      const message = safety.safetyAlertSpeech || getUiTranslation("This field contains sensitive information. Please fill it manually.", lang);
       appendStep(context, { stepNumber, action, status: "blocked", spokenSummary: message, details: safety.reason, timestamp: Date.now() });
       emitStatus(context, "blocked", message);
       await context.callbacks?.onPrompt?.(message, "blocked");
@@ -215,7 +235,7 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
     }
 
     if (safety.requiresConfirmation) {
-      const message = safety.safetyAlertSpeech || "Do you want to confirm this action? Say yes to continue.";
+      const message = safety.safetyAlertSpeech || getUiTranslation("Do you want to confirm this action? Say yes to continue.", lang);
       context.pendingConfirmation = { action, message, reason: safety.reason, snapshot: currentSnapshot };
       appendStep(context, { stepNumber, action, status: "confirmation_required", spokenSummary: message, details: safety.reason, timestamp: Date.now() });
       emitStatus(context, "waiting_confirmation", message);
@@ -239,7 +259,8 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
       return { status: "waiting_confirmation", context };
     }
 
-    emitStatus(context, "running", `Step ${stepNumber}: executing ${action.action}`);
+    const executingLabel = getUiTranslation("Executing", lang, "कार्रवाई हो रही है");
+    emitStatus(context, "running", `${stepLabel} ${stepNumber}: ${executingLabel} ${action.action}`);
     let response: ExecutionResponse;
     try {
       response = await context.sendTabMessage<ExecutionResponse>(context.tabId, { type: "BV_EXECUTE_ACTION", action });
@@ -262,13 +283,13 @@ async function runLoop(context: TaskRunnerContext, initialSnapshot?: PageSnapsho
 
     lastSuccessfulRepeatableAction = key;
     lastSkippedRepeatedAction = null;
-    const speech = outcomeSpeech(action, currentSnapshot);
+    const speech = outcomeSpeech(action, currentSnapshot, lang);
     context.conversation = [...context.conversation, { role: "assistant" as const, content: speech }].slice(-6);
     appendStep(context, { stepNumber, action, status: "success", spokenSummary: speech, timestamp: Date.now() });
     currentSnapshot = response.freshSnapshot || await fetchSnapshot(context);
   }
 
-  const error = `The maximum of ${context.maxSteps} steps has been reached.`;
+  const error = getUiTranslation("The maximum of 15 steps has been reached.", lang);
   emitStatus(context, "failed", error);
   return { status: "failed", error, context };
 }
@@ -277,13 +298,14 @@ export async function runAgentTask(context: TaskRunnerContext): Promise<TaskRunn
   if (isAborted(context)) return { status: "stopped", context };
   context.pendingConfirmation = null;
   context.pendingQuestion = null;
-  emitStatus(context, "running", "Starting task");
+  const lang = resolveLanguage(context.languageCode || "en-IN", context.goal);
+  emitStatus(context, "running", getUiTranslation("Starting task", lang));
   try {
     await context.sendTabMessage(context.tabId, { type: "BV_ACTIVATE_AGENT", statusText: "Browse Voice active" });
     return await runLoop(context);
   } catch (error) {
     if (isAborted(context)) return { status: "stopped", context };
-    const message = error instanceof Error ? error.message : "Task failed.";
+    const message = error instanceof Error ? error.message : getUiTranslation("Task failed.", lang);
     emitStatus(context, "failed", message);
     return { status: "failed", error: message, context };
   }
@@ -291,21 +313,22 @@ export async function runAgentTask(context: TaskRunnerContext): Promise<TaskRunn
 
 export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boolean, answer?: string): Promise<TaskRunnerResult> {
   if (isAborted(context)) return { status: "stopped", context };
+  const lang = resolveLanguage(context.languageCode || "en-IN", context.goal);
   const pending = context.pendingConfirmation;
   if (pending) {
     context.pendingConfirmation = null;
     if (!confirmed) {
-      const message = "The action was cancelled.";
+      const message = getUiTranslation("The action was cancelled.", lang);
       emitStatus(context, "failed", message);
       return { status: "failed", error: message, context };
     }
     try {
-      emitStatus(context, "running", "Executing confirmed action");
+      emitStatus(context, "running", getUiTranslation("Executing confirmed action", lang));
       const response = await executeConfirmedAction(context, pending);
-      if (!response?.ok || response.result?.success === false) throw new Error(response?.error || response?.result?.error || "The confirmed action could not be completed.");
+      if (!response?.ok || response.result?.success === false) throw new Error(response?.error || response?.result?.error || getUiTranslation("The confirmed action could not be completed.", lang));
       const snapshot = response.freshSnapshot || await fetchSnapshot(context);
       const stepNumber = context.steps.length + 1;
-      const speech = hasPaymentReceipt(snapshot.summary) ? "Payment receipt is visible." : outcomeSpeech(pending.action, pending.snapshot);
+      const speech = hasPaymentReceipt(snapshot.summary) ? getUiTranslation("Payment receipt is visible.", lang) : outcomeSpeech(pending.action, pending.snapshot, lang);
       appendStep(context, { stepNumber, action: pending.action, status: "success", spokenSummary: speech, timestamp: Date.now() });
       context.conversation = [...context.conversation, { role: "assistant" as const, content: speech }].slice(-6);
       if (hasPaymentReceipt(snapshot.summary)) {
@@ -314,7 +337,7 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
       }
       return await runLoop(context, snapshot);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The confirmed action could not be completed.";
+      const message = error instanceof Error ? error.message : getUiTranslation("The confirmed action could not be completed.", lang);
       emitStatus(context, "failed", message);
       return { status: "failed", error: message, context };
     }
@@ -324,9 +347,9 @@ export async function resumeAgentTask(context: TaskRunnerContext, confirmed: boo
     context.pendingQuestion = null;
     if (!answer?.trim()) return { status: "waiting_confirmation", context };
     context.conversation = [...context.conversation, { role: "user" as const, content: answer.trim() }].slice(-6);
-    emitStatus(context, "running", "Continuing task");
+    emitStatus(context, "running", getUiTranslation("Continuing task", lang));
     try { return await runLoop(context); } catch (error) {
-      const message = error instanceof Error ? error.message : "Task failed.";
+      const message = error instanceof Error ? error.message : getUiTranslation("Task failed.", lang);
       emitStatus(context, "failed", message);
       return { status: "failed", error: message, context };
     }

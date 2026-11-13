@@ -219,8 +219,13 @@ export async function speakWithTimbre(
 
   // If no Gnani API Key is configured, fall back gracefully to browser SpeechSynthesis
   if (!config.apiKey || config.apiKey.trim().length === 0) {
-    speakWithBrowserTTS(text, config.languageCode);
-    return;
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 8000);
+      speakWithBrowserTTS(text, config.languageCode, () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 
   try {
@@ -288,13 +293,20 @@ export async function speakWithTimbre(
 /**
  * Fallback browser TTS using window.speechSynthesis for testing/offline support.
  */
-export function speakWithBrowserTTS(text: string, languageCode: string = "hi-IN"): void {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
+export function speakWithBrowserTTS(text: string, languageCode: string = "hi-IN", onEnd?: () => void): void {
+  if (typeof window === "undefined" || !window.speechSynthesis) {
+    onEnd?.();
+    return;
+  }
 
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = languageCode === "indic-auto" ? "hi-IN" : languageCode;
   utterance.rate = 1.0;
+  if (onEnd) {
+    utterance.onend = () => onEnd();
+    utterance.onerror = () => onEnd();
+  }
   window.speechSynthesis.speak(utterance);
 }
 

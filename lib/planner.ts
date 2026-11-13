@@ -15,6 +15,7 @@ import {
 } from "./schema.ts";
 import type { PageSnapshot } from "./safety.ts";
 import { hasPaymentReceipt, hasVisiblePaymentForm, isPaymentIntent } from "./payment-state.ts";
+import { resolveLanguage, MOCK_PLANNER_COPY } from "./i18n.ts";
 
 export interface StepLogEntry {
   stepNumber: number;
@@ -826,6 +827,10 @@ export class MockRuleBasedPlanner implements PlannerProvider {
     const req = `${request.userRequest} ${latestUserRequest}`.toLowerCase();
     const elements = request.snapshot.interactiveElements;
     const history = request.history || [];
+    const lang = request.languageCode
+      ? resolveLanguage(request.languageCode, request.userRequest)
+      : (/\p{Script=Devanagari}/u.test(request.userRequest) || /bharo|dekho|karo|daalo/i.test(request.userRequest) ? "hi-IN" : "en-IN");
+    const mockCopy = MOCK_PLANNER_COPY[lang] || MOCK_PLANNER_COPY["en-IN"];
 
     // 1. Explicit Confirmation Step: "ha", "yes", "confirm payment"
     const latestUserExplicitlyConfirmed = /\b(?:yes|haan|ha|haa|confirm(?:ed)?|approve|proceed)\b|हाँ|हां|पुष्टि/i.test(latestUserRequest);
@@ -851,7 +856,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
     if (hasPaymentReceipt(request.snapshot.summary)) {
       return {
         action: "done",
-        summary: "The electricity bill payment was completed successfully. The receipt is available on screen.",
+        summary: mockCopy.paymentReceiptSummary,
         rationale: "Payment completed successfully.",
       };
     }
@@ -865,7 +870,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
     if (isPaymentIntent(req) && hasVisiblePaymentForm(request.snapshot) && paySubmitButton) {
       return {
         action: "ask_user",
-        question: "भुगतान फ़ॉर्म खुला है। कार्ड, UPI या अन्य गोपनीय जानकारी आप स्वयं भरें। राशि जाँचने के बाद, अगर भुगतान करना चाहते हैं, तो कहें ‘भुगतान की पुष्टि करें’।",
+        question: mockCopy.paymentFormQuestion,
         rationale: "गोपनीय भुगतान जानकारी आपको स्वयं भरनी होगी।",
       };
     }
@@ -879,7 +884,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
     if (billVisible && (req.includes("dekho") || req.includes("check") || req.includes("show") || req.includes("pending"))) {
       return {
         action: "done",
-        summary: "Your electricity bill is ₹1,450, due on November 15, 2026.",
+        summary: mockCopy.billSummary,
         rationale: "The bill details are visible on screen.",
       };
     }
@@ -961,7 +966,7 @@ export class MockRuleBasedPlanner implements PlannerProvider {
 
     return {
       action: "ask_user",
-      question: "What would you like to do? For example: check the electricity bill or pay the bill.",
+      question: mockCopy.generalAskUser,
       options: ["Check the electricity bill", "Enter consumer number 100234567", "Pay the bill"],
       rationale: "Asking the user for instructions.",
     };
